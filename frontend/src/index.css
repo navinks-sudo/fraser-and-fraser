@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand colors — blue palette (token names kept for backward-compat across JSX) */
+  --color-brand-amber: #2563EB;        /* blue-600 — primary accent */
+  --color-brand-amber-light: #DBEAFE;  /* blue-100 — accent surface */
+  --color-brand-amber-dark: #1D4ED8;   /* blue-700 — accent hover/strong text */
+  --color-brand-sepia: #1E3A8A;        /* blue-900 — display headings */
+
+  /* Ink/Typography — cool greys */
+  --color-ink: #0F172A;            /* slate-900 */
+  --color-ink-secondary: #334155;  /* slate-700 */
+  --color-ink-tertiary: #64748B;   /* slate-500 */
+
+  /* Surface/Backgrounds — pure white canvas */
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #F8FAFC;  /* slate-50 */
+  --color-surface-sunken: #F1F5F9;  /* slate-100 */
+  --color-surface-canvas: #FFFFFF;  /* pure white */
+
+  /* Lines/Borders — cool greys */
+  --color-line: #CBD5E1;          /* slate-300 */
+  --color-line-subtle: #E2E8F0;   /* slate-200 */
+  --color-line-strong: #94A3B8;   /* slate-400 */
+  --color-line-accent: #2563EB;   /* blue-600 */
+
+  /* Shadows — slate-tinted */
+  --shadow-warm-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-warm-sm: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -1px rgba(15, 23, 42, 0.03);
+  --shadow-warm-md: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
+  --shadow-warm-lg: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 10px 10px -5px rgba(15, 23, 42, 0.05);
+
+  /* Fonts */
+  --font-display: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+/* Force light theme — never inherit OS dark preference */
+:root {
+  color-scheme: light only;
+}
+
+html, body {
+  background-color: var(--color-surface-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbar — slate-toned */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #F1F5F9; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* Selection highlight */
+::selection { background: #DBEAFE; color: #1E3A8A; }
+
+/* Focus ring — blue */
+*:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+}
+
+/* react-d3-tree connector lines — orthogonal slate strokes, never filled */
+.rd3t-link,
+.tree-link {
+  fill: none !important;
+  stroke: #94A3B8;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.rd3t-tree-container { background: #FFFFFF; }
+/* Hide only the d3-tree built-in node circle, not any circle we draw ourselves */
+.rd3t-node > circle:first-of-type:not([data-keep]),
+.rd3t-leaf-node > circle:first-of-type:not([data-keep]) { display: none; }
+
+/* ─── Animations used on Landing / Auth pages ─────────────────────────── */
+@keyframes float {
+  0%, 100% { transform: translateY(0) translateX(0); }
+  50%      { transform: translateY(-6px) translateX(2px); }
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50%      { opacity: 1;   transform: scale(1.4); }
+}
+@keyframes pulseSlow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.05); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-pulse-slow { animation: pulseSlow 8s ease-in-out infinite; }
+
+/* SVG text — inherit Inter, default to Regular so nothing looks bold by accident */
+svg text {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 400;
+  font-feature-settings: 'cv11', 'ss01';
+  text-rendering: geometricPrecision;
+  stroke: none;
+}
+
+/* Reusable component classes */
+@layer components {
+  .btn-primary {
+    @apply bg-brand-amber text-white font-medium px-4 py-2 rounded-md
+           hover:bg-brand-amber-dark active:scale-95
+           transition-all duration-150 shadow-warm-sm;
+  }
+
+  .btn-secondary {
+    @apply bg-surface-raised text-ink border border-line
+           font-medium px-4 py-2 rounded-md
+           hover:bg-surface-sunken hover:border-line-strong
+           active:scale-95 transition-all duration-150 shadow-warm-xs;
+  }
+
+  .btn-ghost {
+    @apply text-ink-secondary font-medium px-3 py-2 rounded-md
+           hover:bg-surface-raised hover:text-ink
+           active:scale-95 transition-all duration-150;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white font-medium px-4 py-2 rounded-md
+           hover:bg-red-700 active:scale-95
+           transition-all duration-150 shadow-warm-sm;
+  }
+
+  .card {
+    @apply bg-surface rounded-xl border border-line-subtle shadow-warm-sm
+           hover:shadow-warm-md transition-shadow duration-200;
+  }
+
+  .input {
+    @apply w-full bg-surface-sunken border border-line rounded-md
+           px-3 py-2 text-ink placeholder:text-ink-tertiary
+           focus:outline-none focus:border-line-accent
+           focus:ring-2 focus:ring-brand-amber/20
+           transition-colors duration-150;
+  }
+
+  .badge-pending    { @apply bg-surface-raised text-ink-secondary border border-line text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-progress   { @apply bg-brand-amber-light text-brand-amber-dark border border-blue-300 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-complete   { @apply bg-green-50 text-green-800 border border-green-200 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-skipped    { @apply bg-slate-50 text-slate-600 border border-slate-200 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-error      { @apply bg-red-50 text-red-800 border border-red-200 text-xs font-medium px-2 py-0.5 rounded-full; }
+
+  .heading-display  { @apply font-display text-brand-sepia; }
+  .heading-page     { @apply text-2xl font-semibold text-ink; }
+  .heading-section  { @apply text-lg font-semibold text-ink; }
+}

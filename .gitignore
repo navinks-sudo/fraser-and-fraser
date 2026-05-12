@@ -1,0 +1,53 @@
+# --- Claude / agent artifacts ---
+.claude/
+.agents/
+
+# --- Secrets ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Node ---
+node_modules/
+.npm/
+.eslintcache
+dist/
+build/
+.vite/
+
+# --- Local user data ---
+# 24 MB SQLite DB with user records — regenerated on first run via seed_user.py
+genealogiq.db
+genealogiq.db-journal
+genealogiq.db-wal
+genealogiq.db-shm
+
+# Uploaded images / PDFs / spreadsheets
+storage/
+
+# Stray upload folder produced by ad-hoc dev sessions
+ce502_*/
+
+# --- Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
