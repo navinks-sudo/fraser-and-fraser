@@ -1,4 +1,9 @@
-import base64
+"""Detects bounding boxes for individual genealogical records on a page.
+
+Uses Gemini vision. Returns regions in the *original* image's pixel
+coordinates so the frontend can overlay them on the un-resized file.
+"""
+import asyncio
 import io
 import json
 import re
@@ -8,7 +13,7 @@ from typing import Tuple
 from PIL import Image as PILImage, ImageFile
 
 from backend.config import settings
-from backend.services.openai_service import get_openai_client
+from backend.services.gemini_service import _get_genai_client, _generate_with_retry
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -16,24 +21,17 @@ _MAX_DIMENSION = 2048
 
 
 class SegmentService:
-    """Detects bounding boxes for individual genealogical records on a page.
-
-    Uses the same vision LLM as the OCR step. Returns a list of regions in the
-    *original* image's pixel coordinates so the frontend can overlay them on
-    the unscaled image.
-    """
-
     def __init__(self):
-        self.client = get_openai_client()
-        self.model = settings.openai_model
+        self.model = settings.gemini_model
 
-    def _prepare_image(self, image_path: str) -> Tuple[str, Tuple[int, int], Tuple[int, int]]:
+    def _prepare_image(self, image_path: str) -> Tuple[bytes, Tuple[int, int], Tuple[int, int]]:
+        """Open + normalise + downsize the image. Returns (jpeg_bytes, orig_size, sent_size)."""
         if not image_path or not Path(image_path).is_file():
             raise FileNotFoundError(f"Image not found on disk: {image_path}")
 
         with PILImage.open(image_path) as img:
             img.load()
-            orig_size = img.size  # (W, H)
+            orig_size = img.size
 
             if img.mode in ("RGBA", "LA"):
                 bg = PILImage.new("RGB", img.size, (255, 255, 255))
@@ -53,12 +51,11 @@ class SegmentService:
 
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=88, optimize=True)
-            data_url = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-            return data_url, orig_size, sent_size
+            return buf.getvalue(), orig_size, sent_size
 
     @staticmethod
     def _extract_json(raw: str) -> dict:
-        text = raw.strip()
+        text = (raw or "").strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
         m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -67,7 +64,10 @@ class SegmentService:
         return json.loads(text)
 
     async def detect_regions(self, image_path: str) -> dict:
-        data_url, orig_size, sent_size = self._prepare_image(image_path)
+        if not settings.gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is not configured.")
+
+        jpeg_bytes, orig_size, sent_size = self._prepare_image(image_path)
 
         prompt = (
             "You are analysing a scan of a historical record book (parish register, civil "
@@ -83,26 +83,25 @@ class SegmentService:
             '"summary": "Birth of <name>", "language": "fr"}]}'
         )
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
-            max_tokens=2048,
-        )
+        def _call():
+            client = _get_genai_client()
+            from google.genai import types
+            return _generate_with_retry(
+                client,
+                model=self.model,
+                contents=[
+                    types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"),
+                    prompt,
+                ],
+                config={"response_mime_type": "application/json"},
+            )
 
-        raw = (response.choices[0].message.content or "").strip()
+        resp = await asyncio.to_thread(_call)
+        raw = (resp.text or "").strip()
         data = self._extract_json(raw)
         regions = data.get("regions") or []
 
-        # Map coordinates from sent image-space back to the original-resolution image,
-        # so the frontend can lay rectangles directly on the un-resized file.
+        # Map coords from sent image-space back to original-resolution.
         sx = orig_size[0] / sent_size[0] if sent_size[0] else 1
         sy = orig_size[1] / sent_size[1] if sent_size[1] else 1
         cleaned = []
@@ -111,7 +110,6 @@ class SegmentService:
             if len(bb) != 4:
                 continue
             x1, y1, x2, y2 = bb
-            # clamp + reorder
             x1, x2 = sorted([max(0, x1), min(sent_size[0], x2)])
             y1, y2 = sorted([max(0, y1), min(sent_size[1], y2)])
             cleaned.append({
