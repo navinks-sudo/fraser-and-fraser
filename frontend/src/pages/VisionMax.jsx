@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../api/axios';
+import api, { assetUrl } from '../api/axios';
 import StageProgress from '../components/Layout/StageProgress';
 import { Sliders, RotateCcw, Save, ChevronLeft, ChevronRight, Gauge, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react';
 
@@ -176,7 +176,7 @@ const VisionMax = () => {
           
           <div className="max-h-full max-w-full shadow-2xl relative">
             <img 
-              src={`http://localhost:8000/${currentImage?.has_enhancement ? currentImage.enhanced_path : currentImage?.original_path}`}
+              src={assetUrl(currentImage?.has_enhancement ? currentImage.enhanced_path : currentImage?.original_path)}
               alt="Document"
               className="max-h-[80vh] object-contain border border-white/10"
               key={currentImage?.id} // Force reload on image change

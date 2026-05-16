@@ -1,44 +1,79 @@
 @import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap');
+
 @theme {
-  /* Brand colors — blue palette (token names kept for backward-compat across JSX) */
-  --color-brand-amber: #2563EB;        /* blue-600 — primary accent */
-  --color-brand-amber-light: #DBEAFE;  /* blue-100 — accent surface */
-  --color-brand-amber-dark: #1D4ED8;   /* blue-700 — accent hover/strong text */
-  --color-brand-sepia: #1E3A8A;        /* blue-900 — display headings */
+  /* ─────────────────────────────────────────────────────────────────────
+     Brand palette — Navy + Orange editorial
+     The "brand-amber" token names are kept for backwards-compat across
+     JSX, but their values now resolve to the new ORANGE accent so every
+     component that referenced them rerenders in the new theme.
+     ───────────────────────────────────────────────────────────────────── */
+  --color-brand-amber:        #E25E10;  /* primary orange — CTAs, accents */
+  --color-brand-amber-light:  #FDEADA;  /* soft orange surface */
+  --color-brand-amber-dark:   #B84A07;  /* deep orange — hover/strong */
+  --color-brand-sepia:        #0B1F3A;  /* deep navy — display headings */
 
-  /* Ink/Typography — cool greys */
-  --color-ink: #0F172A;            /* slate-900 */
-  --color-ink-secondary: #334155;  /* slate-700 */
-  --color-ink-tertiary: #64748B;   /* slate-500 */
+  /* Direct orange shades (use these in new code) */
+  --color-orange-50:  #FFF5EC;
+  --color-orange-100: #FDEADA;
+  --color-orange-200: #FBD0AC;
+  --color-orange-300: #F7AE74;
+  --color-orange-400: #F38B45;
+  --color-orange-500: #E25E10;
+  --color-orange-600: #C84F0D;
+  --color-orange-700: #A53F09;
+  --color-orange-800: #7C2F06;
+  --color-orange-900: #4F1D03;
 
-  /* Surface/Backgrounds — pure white canvas */
-  --color-surface: #FFFFFF;
-  --color-surface-raised: #F8FAFC;  /* slate-50 */
-  --color-surface-sunken: #F1F5F9;  /* slate-100 */
-  --color-surface-canvas: #FFFFFF;  /* pure white */
+  /* Direct navy shades */
+  --color-navy-50:  #F2F4F8;
+  --color-navy-100: #DDE3ED;
+  --color-navy-200: #B9C4D6;
+  --color-navy-300: #8A9AB6;
+  --color-navy-400: #5E708F;
+  --color-navy-500: #3D4F70;
+  --color-navy-600: #233758;
+  --color-navy-700: #142849;
+  --color-navy-800: #0B1F3A;
+  --color-navy-900: #07142A;
 
-  /* Lines/Borders — cool greys */
-  --color-line: #CBD5E1;          /* slate-300 */
-  --color-line-subtle: #E2E8F0;   /* slate-200 */
-  --color-line-strong: #94A3B8;   /* slate-400 */
-  --color-line-accent: #2563EB;   /* blue-600 */
+  /* Ink / Typography */
+  --color-ink:            #0B1F3A;
+  --color-ink-secondary:  #2A3550;
+  --color-ink-tertiary:   #6A7588;
 
-  /* Shadows — slate-tinted */
-  --shadow-warm-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --shadow-warm-sm: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -1px rgba(15, 23, 42, 0.03);
-  --shadow-warm-md: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
-  --shadow-warm-lg: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 10px 10px -5px rgba(15, 23, 42, 0.05);
+  /* Surfaces */
+  --color-surface:         #FFFFFF;
+  --color-surface-raised:  #F8F6F1;  /* warm paper */
+  --color-surface-sunken:  #EFEBE1;  /* deeper paper */
+  --color-surface-canvas:  #F8F6F1;  /* page background — editorial off-white */
+
+  /* Lines */
+  --color-line:          #D9D2C1;  /* warm grey */
+  --color-line-subtle:   #E8E2D4;
+  --color-line-strong:   #B9B19E;
+  --color-line-accent:   #E25E10;  /* orange highlight rule */
+
+  /* Shadows — neutral warm */
+  --shadow-warm-xs: 0 1px 2px rgba(11, 31, 58, 0.06);
+  --shadow-warm-sm: 0 4px 8px -2px rgba(11, 31, 58, 0.06), 0 2px 4px -2px rgba(11, 31, 58, 0.04);
+  --shadow-warm-md: 0 12px 20px -6px rgba(11, 31, 58, 0.10), 0 4px 8px -4px rgba(11, 31, 58, 0.06);
+  --shadow-warm-lg: 0 24px 32px -8px rgba(11, 31, 58, 0.14), 0 12px 16px -8px rgba(11, 31, 58, 0.08);
+  --shadow-orange-glow: 0 18px 40px -10px rgba(226, 94, 16, 0.45);
 
   /* Fonts */
-  --font-display: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-sans:    'Inter', system-ui, sans-serif;
+  --font-italic:  'Instrument Serif', 'Inter Tight', serif;
 }
 
 /* Force light theme — never inherit OS dark preference */
 :root {
   color-scheme: light only;
 }
+
+html { scroll-behavior: smooth; }
 
 html, body {
   background-color: var(--color-surface-canvas);
@@ -50,31 +85,30 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
-/* Scrollbar — slate-toned */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #F1F5F9; }
-::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+/* Scrollbar — warm */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #EFEBE1; }
+::-webkit-scrollbar-thumb { background: #B9B19E; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #8A8470; }
 
 /* Selection highlight */
-::selection { background: #DBEAFE; color: #1E3A8A; }
+::selection { background: #FDEADA; color: #7C2F06; }
 
-/* Focus ring — blue */
+/* Focus ring — orange */
 *:focus-visible {
-  outline: 2px solid #2563EB;
+  outline: 2px solid #E25E10;
   outline-offset: 2px;
 }
 
-/* react-d3-tree connector lines — orthogonal slate strokes, never filled */
+/* react-d3-tree connector lines */
 .rd3t-link,
 .tree-link {
   fill: none !important;
-  stroke: #94A3B8;
+  stroke: #B9B19E;
   stroke-width: 1.5;
   stroke-linecap: round;
 }
-.rd3t-tree-container { background: #FFFFFF; }
-/* Hide only the d3-tree built-in node circle, not any circle we draw ourselves */
+.rd3t-tree-container { background: #F8F6F1; }
 .rd3t-node > circle:first-of-type:not([data-keep]),
 .rd3t-leaf-node > circle:first-of-type:not([data-keep]) { display: none; }
 
@@ -95,9 +129,19 @@ html, body {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+@keyframes barFill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
 .animate-pulse-slow { animation: pulseSlow 8s ease-in-out infinite; }
+.animate-bar-fill   { transform-origin: left; animation: barFill 1.4s cubic-bezier(.2,.7,.2,1) both; }
+.animate-fade-up    { animation: fadeUp 0.7s ease-out both; }
 
-/* SVG text — inherit Inter, default to Regular so nothing looks bold by accident */
+/* SVG text */
 svg text {
   font-family: 'Inter', system-ui, sans-serif;
   font-weight: 400;
@@ -106,18 +150,64 @@ svg text {
   stroke: none;
 }
 
+/* Editorial italic accent — used for the orange slogan phrases */
+.italic-accent {
+  font-family: var(--font-italic);
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-orange-500);
+  letter-spacing: -0.01em;
+}
+
+/* Editorial display heading — used for hero copy.
+   No color rule here so any text-* utility (text-white, text-orange-300, …)
+   wins. Default colour is inherited from the parent context. */
+.display-heading {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 0.98;
+}
+
+/* Caps breadcrumb — "SOFTWARE · AI · PRODUCTS" */
+.eyebrow {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-ink-tertiary);
+}
+.eyebrow-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+.eyebrow-rule::before {
+  content: '';
+  width: 48px;
+  height: 1px;
+  background: var(--color-navy-300);
+}
+
 /* Reusable component classes */
 @layer components {
   .btn-primary {
-    @apply bg-brand-amber text-white font-medium px-4 py-2 rounded-md
-           hover:bg-brand-amber-dark active:scale-95
+    @apply bg-navy-800 text-white font-semibold px-5 py-2.5 rounded-md
+           hover:bg-navy-900 active:scale-95
+           transition-all duration-150 shadow-warm-sm;
+  }
+
+  .btn-orange {
+    @apply bg-orange-500 text-white font-semibold px-5 py-2.5 rounded-md
+           hover:bg-orange-600 active:scale-95
            transition-all duration-150 shadow-warm-sm;
   }
 
   .btn-secondary {
-    @apply bg-surface-raised text-ink border border-line
-           font-medium px-4 py-2 rounded-md
-           hover:bg-surface-sunken hover:border-line-strong
+    @apply bg-white text-ink border border-line
+           font-medium px-5 py-2.5 rounded-md
+           hover:bg-surface-raised hover:border-navy-300
            active:scale-95 transition-all duration-150 shadow-warm-xs;
   }
 
@@ -134,25 +224,26 @@ svg text {
   }
 
   .card {
-    @apply bg-surface rounded-xl border border-line-subtle shadow-warm-sm
+    @apply bg-surface rounded-2xl border border-line-subtle shadow-warm-sm
            hover:shadow-warm-md transition-shadow duration-200;
   }
 
   .input {
-    @apply w-full bg-surface-sunken border border-line rounded-md
-           px-3 py-2 text-ink placeholder:text-ink-tertiary
-           focus:outline-none focus:border-line-accent
-           focus:ring-2 focus:ring-brand-amber/20
+    @apply w-full bg-white border border-line rounded-lg
+           px-3.5 py-2.5 text-ink placeholder:text-ink-tertiary
+           focus:outline-none focus:border-orange-500
+           focus:ring-2 focus:ring-orange-500/20
            transition-colors duration-150;
   }
 
-  .badge-pending    { @apply bg-surface-raised text-ink-secondary border border-line text-xs font-medium px-2 py-0.5 rounded-full; }
-  .badge-progress   { @apply bg-brand-amber-light text-brand-amber-dark border border-blue-300 text-xs font-medium px-2 py-0.5 rounded-full; }
-  .badge-complete   { @apply bg-green-50 text-green-800 border border-green-200 text-xs font-medium px-2 py-0.5 rounded-full; }
-  .badge-skipped    { @apply bg-slate-50 text-slate-600 border border-slate-200 text-xs font-medium px-2 py-0.5 rounded-full; }
-  .badge-error      { @apply bg-red-50 text-red-800 border border-red-200 text-xs font-medium px-2 py-0.5 rounded-full; }
+  /* Editorial badges */
+  .badge-pending    { @apply bg-surface-raised text-ink-secondary border border-line text-xs font-semibold px-2.5 py-0.5 rounded-full; }
+  .badge-progress   { @apply bg-orange-100 text-orange-800 border border-orange-200 text-xs font-semibold px-2.5 py-0.5 rounded-full; }
+  .badge-complete   { @apply bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold px-2.5 py-0.5 rounded-full; }
+  .badge-skipped    { @apply bg-navy-50 text-navy-500 border border-navy-100 text-xs font-semibold px-2.5 py-0.5 rounded-full; }
+  .badge-error      { @apply bg-red-50 text-red-800 border border-red-200 text-xs font-semibold px-2.5 py-0.5 rounded-full; }
 
-  .heading-display  { @apply font-display text-brand-sepia; }
-  .heading-page     { @apply text-2xl font-semibold text-ink; }
-  .heading-section  { @apply text-lg font-semibold text-ink; }
+  .heading-display  { @apply font-display font-extrabold tracking-tight text-navy-800; }
+  .heading-page     { @apply font-display text-3xl font-extrabold text-navy-800 tracking-tight; }
+  .heading-section  { @apply font-display text-lg font-bold text-navy-800 tracking-tight; }
 }

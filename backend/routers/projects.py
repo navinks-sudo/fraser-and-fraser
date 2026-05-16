@@ -23,7 +23,9 @@ async def create_project(
     new_project = Project(
         user_id=user.id,
         name=project_data.name,
-        description=project_data.description
+        description=project_data.description,
+        research_mode=project_data.research_mode or "mixed",
+        family_label=(project_data.family_label or None),
     )
     db.add(new_project)
     await db.commit()

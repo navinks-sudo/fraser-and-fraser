@@ -1,25 +1,40 @@
-import React, { useMemo } from 'react';
-import {
-  User, UserRound, HelpCircle, Heart, Briefcase, MapPin, Star,
-} from 'lucide-react';
+import React, { useMemo, forwardRef, useRef, useImperativeHandle } from 'react';
+import { User, UserRound, HelpCircle } from 'lucide-react';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { layoutPedigree, PERSON_W, PERSON_H } from '../../utils/pedigreeLayout';
 
-// Restrained, document-style palette. Tints are muted so the cards read like
-// printed cells in a published pedigree, not bright UI chips.
+// Restrained — borders + small symbol only, no fills, no shouting accents.
+// Harmonised with the navy + orange brand palette.
 const PALETTE = {
-  M: { accent: '#1F3A6D', soft: '#EEF2FB', deep: '#0F1F40', muted: '#5872A6' },
-  F: { accent: '#7E2F4F', soft: '#FBF1F5', deep: '#4A1530', muted: '#A6577A' },
-  U: { accent: '#475569', soft: '#F1F5F9', deep: '#334155', muted: '#94A3B8' },
+  M: { border: '#142849', symbol: '#0B1F3A', muted: '#3D4F70' },  // navy
+  F: { border: '#E25E10', symbol: '#7C2F06', muted: '#C84F0D' },  // orange
+  U: { border: '#B9B19E', symbol: '#5B6478', muted: '#8A8470' },  // warm grey
 };
 
-const GenderIcon = ({ g, size = 18, color }) => {
-  if (g === 'F') return <UserRound size={size} color={color} strokeWidth={1.6} />;
-  if (g === 'M') return <User size={size} color={color} strokeWidth={1.6} />;
-  return <HelpCircle size={size} color={color} strokeWidth={1.6} />;
+const PHOTO_H = 110;            // photo area inside the card
+const ANCHOR_R = 5;             // top anchor dot radius
+const MARRIAGE_DROP = 30;       // how far below cards the marriage anchor sits
+const CARD_CORNER = 8;
+
+const Silhouette = ({ g, fill }) => {
+  // Soft photographer-silhouette in SVG. Same shape for M/F so it reads as
+  // "photo placeholder" rather than gender confirmation.
+  const stroke = fill;
+  return (
+    <g style={{ color: stroke, opacity: 0.42 }}>
+      {/* Head */}
+      <circle cx="0" cy="-22" r="20" fill={stroke} opacity={0.55} />
+      {/* Shoulders / torso */}
+      <path
+        d="M -40 30 Q -40 -8 0 -8 Q 40 -8 40 30 L 40 50 L -40 50 Z"
+        fill={stroke}
+        opacity={0.55}
+      />
+    </g>
+  );
 };
 
-const wrapName = (name, lineLen = 18) => {
+const wrapName = (name, lineLen = 17) => {
   if (!name) return [''];
   if (name.length <= lineLen) return [name];
   const words = name.split(' ');
@@ -33,16 +48,14 @@ const wrapName = (name, lineLen = 18) => {
   return lines;
 };
 
-const truncate = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
-
 const PersonCard = ({ p, selectedId, onClick }) => {
   const pal = PALETTE[p.gender] || PALETTE.U;
   const isSelected = selectedId === p.id;
-  const age = p.birthYear && p.deathYear ? p.deathYear - p.birthYear : null;
-  const lifespan = p.birthYear || p.deathYear
-    ? `${p.birthYear ?? '—'} — ${p.deathYear ?? '—'}`
-    : null;
-  const nameLines = wrapName(p.name, 18);
+  const sym = p.gender === 'F' ? '♀' : p.gender === 'M' ? '♂' : '◦';
+  const nameLines = wrapName(p.name, 17);
+  const dateLine = p.birthYear
+    ? `b. ${p.birthYear}${p.deathYear ? ` – d. ${p.deathYear}` : ''}`
+    : p.deathYear ? `d. ${p.deathYear}` : '';
 
   return (
     <g
@@ -57,149 +70,158 @@ const PersonCard = ({ p, selectedId, onClick }) => {
           y={-3}
           width={PERSON_W + 6}
           height={PERSON_H + 6}
-          rx={9}
+          rx={CARD_CORNER + 2}
           fill="none"
-          stroke="#0F172A"
-          strokeWidth={1.25}
-          opacity={0.55}
+          stroke={pal.symbol}
+          strokeWidth={2}
+          strokeDasharray="4 3"
+          opacity={0.75}
         />
       )}
 
-      {/* Card body — quiet, paper-like */}
+      {/* Top anchor — where parent connections meet the card */}
+      <circle
+        cx={PERSON_W / 2}
+        cy={-2}
+        r={ANCHOR_R}
+        fill="white"
+        stroke={pal.border}
+        strokeWidth={1.5}
+      />
+
+      {/* Card body */}
       <rect
         width={PERSON_W}
         height={PERSON_H}
-        rx={6}
+        rx={CARD_CORNER}
         fill="white"
-        stroke="#E2E8F0"
-        strokeWidth={1}
-        style={{ filter: 'drop-shadow(0 1px 2px rgba(15,23,42,0.04)) drop-shadow(0 4px 12px rgba(15,23,42,0.04))' }}
+        stroke={pal.border}
+        strokeWidth={1.75}
+        style={{ filter: 'drop-shadow(0 1px 2px rgba(15,23,42,0.05))' }}
       />
 
-      {/* Slim top accent in the gender colour */}
-      <rect x={0} y={0} width={PERSON_W} height={4} rx={6} fill={pal.accent} />
-      <rect x={0} y={2} width={PERSON_W} height={2} fill={pal.accent} />
+      {/* Photo well — subtle inset background */}
+      <rect
+        x={6}
+        y={6}
+        width={PERSON_W - 12}
+        height={PHOTO_H}
+        rx={CARD_CORNER - 4}
+        fill="#F8F6F1"
+        stroke="#E8E2D4"
+        strokeWidth={0.5}
+      />
 
-      {/* Generation marker — tiny, top-left, very subtle */}
-      <text
-        x={14}
-        y={20}
-        fill="#94A3B8"
-        style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.2em', fontFamily: "'Inter', sans-serif" }}
-      >
-        GEN {p.generation + 1}
-      </text>
-
-      {/* Subject star — gold, top-right */}
-      {p.principal && (
-        <g transform={`translate(${PERSON_W - 18}, 12)`}>
-          <Star size={11} fill="#D69E2E" color="#D69E2E" strokeWidth={1.2} />
-        </g>
-      )}
-
-      {/* Avatar — refined circle with single ring */}
-      <g transform="translate(18, 32)">
-        <circle cx={16} cy={16} r={17} fill={pal.soft} stroke={pal.accent} strokeWidth={1.2} />
-        <g transform="translate(7, 7)" style={{ color: pal.deep }}>
-          <GenderIcon g={p.gender} size={18} color={pal.deep} />
-        </g>
+      {/* Silhouette photo */}
+      <g transform={`translate(${PERSON_W / 2}, ${6 + PHOTO_H - 22})`}>
+        <Silhouette g={p.gender} fill={pal.muted} />
       </g>
 
-      {/* Name */}
+      {/* Divider under photo */}
+      <line
+        x1={10}
+        y1={6 + PHOTO_H + 8}
+        x2={PERSON_W - 10}
+        y2={6 + PHOTO_H + 8}
+        stroke="#E8E2D4"
+        strokeWidth={1}
+      />
+
+      {/* Name + gender symbol */}
+      <text
+        x={10}
+        y={6 + PHOTO_H + 26}
+        fill={pal.symbol}
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          fontFamily: "'Inter', system-ui, sans-serif",
+        }}
+      >
+        {sym}
+      </text>
       {nameLines.map((line, i) => (
         <text
           key={i}
-          x={62}
-          y={48 + i * 16}
-          fill="#0F172A"
+          x={22}
+          y={6 + PHOTO_H + 26 + i * 13}
+          fill="#0B1F3A"
           style={{
-            fontSize: 14,
-            fontWeight: 700,
-            fontFamily: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif",
-            letterSpacing: '-0.01em',
+            fontSize: 11.5,
+            fontWeight: 800,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            fontFamily: "'Inter Tight', 'Inter', system-ui, sans-serif",
           }}
         >
           {line}
         </text>
       ))}
 
-      {/* Lifespan — tabular nums, slate-500 */}
-      <text
-        x={62}
-        y={48 + nameLines.length * 16 + 2}
-        fill="#64748B"
-        style={{
-          fontSize: 11,
-          fontWeight: 500,
-          letterSpacing: '0.02em',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {lifespan ? `${lifespan}${age != null ? `   ·   ${age} yr` : ''}` : 'dates unknown'}
-      </text>
-
-      {/* Footer divider */}
-      <line x1={14} y1={PERSON_H - 30} x2={PERSON_W - 14} y2={PERSON_H - 30}
-            stroke="#F1F5F9" strokeWidth={1} />
-
-      {/* Place row */}
-      {p.birthPlace && (
-        <g transform={`translate(14, ${PERSON_H - 20})`}>
-          <g style={{ color: '#94A3B8' }}>
-            <MapPin size={10} color="#94A3B8" strokeWidth={1.6} />
-          </g>
-          <text x={14} y={9} fill="#475569" style={{ fontSize: 10.5 }}>
-            {truncate(p.birthPlace, 28)}
-          </text>
-        </g>
+      {/* Birth/death years */}
+      {dateLine && (
+        <text
+          x={22}
+          y={6 + PHOTO_H + 26 + nameLines.length * 13 + 2}
+          fill="#8A8470"
+          style={{
+            fontSize: 9.5,
+            fontStyle: 'italic',
+            fontWeight: 500,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {dateLine}
+        </text>
       )}
 
-      {/* Occupation row (or shifts up if no place) */}
-      {p.occupation && (
-        <g transform={`translate(14, ${PERSON_H - (p.birthPlace ? 6 : 20)})`}>
-          <g style={{ color: '#94A3B8' }}>
-            <Briefcase size={10} color="#94A3B8" strokeWidth={1.6} />
-          </g>
-          <text x={14} y={9} fill="#92400E"
-                style={{ fontSize: 10.5, fontStyle: 'italic', fontWeight: 500 }}>
-            {truncate(p.occupation, 28)}
-          </text>
-        </g>
+      {/* Subject marker — tiny orange corner pip */}
+      {p.principal && (
+        <circle cx={PERSON_W - 10} cy={10} r={3.5} fill="#E25E10" />
       )}
     </g>
   );
 };
 
-// Top-right floating legend so the chart reads as a "document"
 const Legend = () => (
-  <div className="absolute top-4 right-4 z-30 bg-white/95 backdrop-blur border border-line shadow-warm-sm rounded-md p-2.5 text-[10px] font-medium text-ink-secondary">
-    <div className="flex items-center gap-3 mb-1.5 pb-1.5 border-b border-line-subtle">
-      <span className="text-[9px] uppercase tracking-widest text-ink-tertiary font-bold">Legend</span>
+  <div className="absolute top-4 right-4 z-30 bg-surface/95 backdrop-blur border border-line shadow-warm-sm rounded-md p-2.5 text-[10px] font-medium text-ink-secondary">
+    <div className="text-[9px] uppercase tracking-[0.22em] text-ink-tertiary font-bold mb-1.5 pb-1.5 border-b border-line-subtle">
+      Legend
     </div>
     <div className="flex items-center gap-2 mb-1">
-      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#EEF2FB', border: '1.5px solid #1F3A6D' }} />
-      <span>Male</span>
+      <span className="w-3.5 h-3.5 rounded-sm bg-surface" style={{ border: '2px solid #142849' }} />
+      <span><strong className="text-navy-800">♂</strong> Male</span>
     </div>
     <div className="flex items-center gap-2 mb-1">
-      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#FBF1F5', border: '1.5px solid #7E2F4F' }} />
-      <span>Female</span>
+      <span className="w-3.5 h-3.5 rounded-sm bg-surface" style={{ border: '2px solid #E25E10' }} />
+      <span><strong className="text-orange-600">♀</strong> Female</span>
     </div>
     <div className="flex items-center gap-2 mb-1">
-      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#F1F5F9', border: '1.5px solid #475569' }} />
+      <span className="w-3.5 h-3.5 rounded-sm bg-surface" style={{ border: '2px solid #B9B19E' }} />
       <span>Unknown</span>
     </div>
     <div className="flex items-center gap-2 mt-1.5 pt-1.5 border-t border-line-subtle">
-      <Star size={10} fill="#D69E2E" color="#D69E2E" strokeWidth={1} />
+      <span className="w-2 h-2 rounded-full bg-orange-500" />
       <span>Subject of record</span>
-    </div>
-    <div className="flex items-center gap-2 mt-1">
-      <Heart size={10} fill="#9F4267" color="#9F4267" strokeWidth={1} />
-      <span>Married</span>
     </div>
   </div>
 );
 
-const PedigreeChart = ({ gedcomx, onNodeClick, selectedId, direction = 'vertical' }) => {
+const PedigreeChart = forwardRef(({ gedcomx, onNodeClick, selectedId, direction = 'vertical' }, ref) => {
+  // Held by us, populated by TransformWrapper. Exposes:
+  //   zoomIn(step?, time?), zoomOut(step?, time?), resetTransform(time?, animationType?)
+  //   centerView(scale?, time?), setTransform(x, y, scale, time?), instance.transformState
+  const transformRef = useRef(null);
+
+  // Surface a clean zoom API to the parent (TreeViewer's toolbar dock).
+  useImperativeHandle(ref, () => ({
+    zoomIn: (step = 0.2) => transformRef.current?.zoomIn(step, 200),
+    zoomOut: (step = 0.2) => transformRef.current?.zoomOut(step, 200),
+    reset: () => transformRef.current?.resetTransform(300),
+    center: (scale) => transformRef.current?.centerView(scale ?? 0.7, 300),
+    getScale: () => transformRef.current?.instance?.transformState?.scale ?? 1,
+  }), []);
   const layout = useMemo(() => layoutPedigree(gedcomx, { direction }), [gedcomx, direction]);
 
   if (!layout.persons.length) {
@@ -210,16 +232,21 @@ const PedigreeChart = ({ gedcomx, onNodeClick, selectedId, direction = 'vertical
     );
   }
 
+  // Build a small paper-grid by drawing dots — feels like printed pedigree paper
   return (
     <div
       className="w-full h-full relative"
       style={{
-        background: 'linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 50%, #F8FAFC 100%)',
+        background: '#F8F6F1',
+        backgroundImage:
+          'radial-gradient(circle, #D9D2C1 0.7px, transparent 0.7px)',
+        backgroundSize: '24px 24px',
       }}
     >
       <Legend />
 
       <TransformWrapper
+        ref={transformRef}
         initialScale={0.7}
         minScale={0.15}
         maxScale={2.5}
@@ -232,108 +259,161 @@ const PedigreeChart = ({ gedcomx, onNodeClick, selectedId, direction = 'vertical
           wrapperStyle={{ width: '100%', height: '100%' }}
           contentStyle={{ width: layout.width, height: layout.height }}
         >
-          <svg width={layout.width} height={layout.height} style={{ display: 'block' }}>
-            <defs>
-              <linearGradient id="marriageLine" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#1F3A6D" />
-                <stop offset="50%" stopColor="#7E2F4F" />
-                <stop offset="100%" stopColor="#1F3A6D" />
-              </linearGradient>
-              {/* Subtle paper grid for document feel */}
-              <pattern id="paperGrid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
-                <circle cx="0" cy="0" r="0.6" fill="#E2E8F0" />
-              </pattern>
-            </defs>
+          <svg
+            className="pedigree-svg"
+            data-pedigree="root"
+            width={layout.width}
+            height={layout.height}
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
+            xmlns="http://www.w3.org/2000/svg"
+            style={{ display: 'block' }}
+          >
 
-            {/* Paper grid overlay — extremely faint */}
-            <rect width={layout.width} height={layout.height} fill="url(#paperGrid)" opacity={0.5} />
-
-            {/* Generation lanes — alternating quiet tints */}
-            {layout.genRanges.map((g, i) => {
-              const isHorizontal = layout.direction === 'horizontal';
-              const laneFill = i % 2 === 0 ? 'rgba(241,245,249,0.7)' : 'transparent';
-              if (isHorizontal) {
+            {/* Couples — U-shaped connector dropping from each spouse to a shared marriage anchor */}
+            {layout.couples.map((c, i) => {
+              const isVertical = direction === 'vertical';
+              if (isVertical) {
+                // Two cards side by side, U drops below
+                const leftX = Math.min(c.line.x1, c.line.x2);
+                const rightX = Math.max(c.line.x1, c.line.x2);
+                const cardBottom = c.line.y1 + PERSON_H / 2;  // c.line.y1 is mid-height; cardBottom adjusts
+                // Actually our layout puts marriage line at mid-height between cards.
+                // Let's compute card bottom from line y minus half PERSON_H... easier: derive from layout
+                // We need bottom-of-card y, which we don't have directly. Reconstruct from line y:
+                // line.y is at PERSON_H/2 below card top. Card top = line.y - PERSON_H/2. Card bottom = line.y + PERSON_H/2.
+                const cardTopY = c.line.y1 - PERSON_H / 2;
+                const bottomY = cardTopY + PERSON_H;
+                const anchorY = bottomY + MARRIAGE_DROP;
+                const midX = (leftX + rightX) / 2;
+                // Connector path: from left spouse bottom-center -> down -> right to anchor -> up -> right spouse bottom-center
+                const path = `
+                  M ${(c.line.x1)} ${bottomY}
+                  L ${(c.line.x1)} ${anchorY - 8}
+                  Q ${(c.line.x1)} ${anchorY} ${(c.line.x1) + 8} ${anchorY}
+                  L ${(c.line.x2) - 8} ${anchorY}
+                  Q ${(c.line.x2)} ${anchorY} ${(c.line.x2)} ${anchorY - 8}
+                  L ${(c.line.x2)} ${bottomY}
+                `;
                 return (
-                  <g key={`gen-${g.generation}`}>
-                    <rect x={g.main - 36} y={0} width={PERSON_W + 72} height={layout.height} fill={laneFill} />
-                    <g transform={`translate(${g.main + PERSON_W / 2}, 30)`}>
-                      <text textAnchor="middle" fill="#475569"
-                            style={{
-                              fontSize: 9.5,
-                              fontWeight: 700,
-                              letterSpacing: '0.25em',
-                              textTransform: 'uppercase',
-                              fontFamily: "'Inter', system-ui, sans-serif",
-                            }}>
-                        Generation {g.generation + 1}
-                      </text>
-                      <text y={13} textAnchor="middle" fill="#94A3B8"
-                            style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.05em' }}>
-                        {g.minYear ? `c. ${g.minYear}${g.maxYear && g.maxYear !== g.minYear ? `–${g.maxYear}` : ''}` : ''}
-                        {g.minYear && g.count ? ' · ' : ''}
-                        {g.count} {g.count === 1 ? 'person' : 'persons'}
-                      </text>
-                      <line x1={-PERSON_W / 2 - 30} y1={30} x2={PERSON_W / 2 + 30} y2={30} stroke="#CBD5E1" strokeWidth={0.6} />
-                    </g>
+                  <g key={`c-${i}`}>
+                    {/* Build coordinates: line.x1 and line.x2 are EDGES of card (one is +PERSON_W, one is the other card's x).
+                       Use the centers of card bottoms instead. */}
+                    {(() => {
+                      const aLeft = c.leftId ? null : null;  // just to silence
+                      // Marriage line endpoints are card edges; compute center of each card.
+                      // leftCardCenterX = c.line.x1 - PERSON_W/2  (since x1 was leftCardX + PERSON_W)
+                      const leftCenterX = c.line.x1 - PERSON_W / 2;
+                      const rightCenterX = c.line.x2 + PERSON_W / 2;
+                      const path2 = `
+                        M ${leftCenterX} ${bottomY}
+                        L ${leftCenterX} ${anchorY - 10}
+                        Q ${leftCenterX} ${anchorY} ${leftCenterX + 10} ${anchorY}
+                        L ${rightCenterX - 10} ${anchorY}
+                        Q ${rightCenterX} ${anchorY} ${rightCenterX} ${anchorY - 10}
+                        L ${rightCenterX} ${bottomY}
+                      `;
+                      return <path d={path2} fill="none" stroke="#B9B19E" strokeWidth={1.5} strokeLinecap="round" />;
+                    })()}
+                    {/* Marriage anchor */}
+                    <circle cx={midX} cy={anchorY} r={4} fill="white" stroke="#8A8470" strokeWidth={1.5} />
                   </g>
                 );
               }
+              // Horizontal layout — U shape extends to the right of the couple
+              const topY = Math.min(c.line.y1, c.line.y2);
+              const bottomYh = Math.max(c.line.y1, c.line.y2);
+              const cardLeftX = c.line.x1 - PERSON_W / 2;
+              const cardRight = cardLeftX + PERSON_W;
+              const anchorX = cardRight + MARRIAGE_DROP;
+              const midY = (topY + bottomYh) / 2;
+              const topCenterY = topY - PERSON_H / 2 + PERSON_H / 2;  // simplify: just use topY for top card center
+              // We need each card's right-edge center. line.y1, line.y2 ARE the centers.
               return (
-                <g key={`gen-${g.generation}`}>
-                  <rect x={0} y={g.main - 36} width={layout.width} height={PERSON_H + 72} fill={laneFill} />
-                  <g transform={`translate(36, ${g.main - 14})`}>
-                    <text fill="#475569"
-                          style={{
-                            fontSize: 9.5,
-                            fontWeight: 700,
-                            letterSpacing: '0.25em',
-                            textTransform: 'uppercase',
-                            fontFamily: "'Inter', system-ui, sans-serif",
-                          }}>
-                      Generation {g.generation + 1}
-                    </text>
-                    <text x={150} fill="#94A3B8"
-                          style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.05em' }}>
-                      {g.minYear ? `c. ${g.minYear}${g.maxYear && g.maxYear !== g.minYear ? `–${g.maxYear}` : ''}` : ''}
-                      {g.minYear && g.count ? ' · ' : ''}
-                      {g.count} {g.count === 1 ? 'person' : 'persons'}
-                    </text>
-                  </g>
-                  <line x1={36} y1={g.main - 22} x2={layout.width - 36} y2={g.main - 22}
-                        stroke="#CBD5E1" strokeWidth={0.6} />
+                <g key={`c-${i}`}>
+                  <path
+                    d={`
+                      M ${cardRight} ${c.line.y1}
+                      L ${anchorX - 10} ${c.line.y1}
+                      Q ${anchorX} ${c.line.y1} ${anchorX} ${c.line.y1 + (c.line.y1 < c.line.y2 ? 10 : -10)}
+                      L ${anchorX} ${c.line.y2 + (c.line.y1 < c.line.y2 ? -10 : 10)}
+                      Q ${anchorX} ${c.line.y2} ${anchorX - 10} ${c.line.y2}
+                      L ${cardRight} ${c.line.y2}
+                    `}
+                    fill="none"
+                    stroke="#B9B19E"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                  />
+                  <circle cx={anchorX} cy={midY} r={4} fill="white" stroke="#8A8470" strokeWidth={1.5} />
                 </g>
               );
             })}
 
-            {/* Descent — slim, professional slate lines */}
-            {layout.descents.map((d) => (
-              <g key={`desc-${d.id}`}>
-                <line {...d.stem} stroke="#94A3B8" strokeWidth={1.25} strokeLinecap="round" />
-                {d.bracket && (
-                  <line {...d.bracket} stroke="#94A3B8" strokeWidth={1.25} strokeLinecap="round" />
-                )}
-                {d.drops.map((drop, i) => (
-                  <line key={`drop-${d.id}-${i}`} {...drop}
-                        stroke="#94A3B8" strokeWidth={1.25} strokeLinecap="round" />
-                ))}
-              </g>
-            ))}
-
-            {/* Marriage bars */}
-            {layout.couples.map((c, i) => (
-              <g key={`couple-${i}`}>
-                <line {...c.line}
-                      stroke="url(#marriageLine)" strokeWidth={1.5} strokeLinecap="round" />
-                <g transform={`translate(${c.mid.x - 5}, ${c.mid.y - 5})`}>
-                  <circle cx={5} cy={5} r={6} fill="white" stroke="#7E2F4F" strokeWidth={1} />
-                  <g transform="translate(-1, -1)">
-                    <Heart size={9} fill="#7E2F4F" color="#7E2F4F" strokeWidth={1} />
+            {/* Descent (parent marriage anchor → sibling bracket → each child's top anchor) */}
+            {layout.descents.map((d) => {
+              const isVertical = direction === 'vertical';
+              if (isVertical) {
+                // Compute marriage anchor (already drawn). We need the descent stem to start there.
+                // The layout's stem.y1 is parent card bottom. We want descent to start at marriage anchor instead.
+                // Marriage anchor y = parent bottom + MARRIAGE_DROP. Adjust stem to start there.
+                const stemStartY = d.stem.y1 + MARRIAGE_DROP;
+                return (
+                  <g key={`d-${d.id}`}>
+                    {/* Stem from marriage anchor down to bracket */}
+                    <line
+                      x1={d.stem.x1}
+                      y1={stemStartY}
+                      x2={d.stem.x2}
+                      y2={d.stem.y2}
+                      stroke="#B9B19E"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                    />
+                    {/* Bracket */}
+                    {d.bracket && (
+                      <line {...d.bracket} stroke="#B9B19E" strokeWidth={1.5} strokeLinecap="round" />
+                    )}
+                    {/* Drops to each child's top anchor (instead of card top) */}
+                    {d.drops.map((drop, i) => (
+                      <line
+                        key={`drop-${d.id}-${i}`}
+                        x1={drop.x1}
+                        y1={drop.y1}
+                        x2={drop.x2}
+                        y2={drop.y2 - 2}
+                        stroke="#B9B19E"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                      />
+                    ))}
                   </g>
+                );
+              }
+              // Horizontal: similar but rightward
+              const stemStartX = d.stem.x1 + MARRIAGE_DROP;
+              return (
+                <g key={`d-${d.id}`}>
+                  <line
+                    x1={stemStartX}
+                    y1={d.stem.y1}
+                    x2={d.stem.x2}
+                    y2={d.stem.y2}
+                    stroke="#B9B19E"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                  />
+                  {d.bracket && (
+                    <line {...d.bracket} stroke="#B9B19E" strokeWidth={1.5} strokeLinecap="round" />
+                  )}
+                  {d.drops.map((drop, i) => (
+                    <line key={`drop-${d.id}-${i}`} {...drop}
+                          stroke="#B9B19E" strokeWidth={1.5} strokeLinecap="round" />
+                  ))}
                 </g>
-              </g>
-            ))}
+              );
+            })}
 
-            {/* Person cards on top */}
+            {/* Person cards */}
             {layout.persons.map((p) => (
               <PersonCard key={p.id} p={p} selectedId={selectedId} onClick={onNodeClick} />
             ))}
@@ -342,6 +422,7 @@ const PedigreeChart = ({ gedcomx, onNodeClick, selectedId, direction = 'vertical
       </TransformWrapper>
     </div>
   );
-};
+});
+PedigreeChart.displayName = 'PedigreeChart';
 
 export default PedigreeChart;

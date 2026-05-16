@@ -10,13 +10,13 @@
 // then centre the parents over them; if centring would push left/up of the
 // canvas origin, shift the entire subtree to make room.
 
-export const PERSON_W = 250;
-export const PERSON_H = 155;
-const COUPLE_GAP = 40;
-const FAMILY_GAP = 80;
-const SIBLING_GAP = 40;
-const GEN_GAP = 120;
-const PAD = 80;
+export const PERSON_W = 150;
+export const PERSON_H = 180;
+const COUPLE_GAP = 32;     // small gap between spouses (cards stay close)
+const FAMILY_GAP = 64;     // bigger gap between unrelated families
+const SIBLING_GAP = 32;
+const GEN_GAP = 140;       // vertical between generations (room for descent stems)
+const PAD = 72;
 
 const nameOf = (p) => (p.names || [])[0]?.nameForms?.[0]?.fullText || p.id;
 const genderOf = (p) => {
@@ -286,12 +286,17 @@ export function layoutPedigree(gedcomx, opts = {}) {
         const childTopY = byId[f.children[0]].y;
         const bracketY = parentBottom + (childTopY - parentBottom) * 0.55;
         const childCs = f.children.map((c) => byId[c].x + PERSON_W / 2);
+        // The bracket must connect the parent's stem to EVERY child drop —
+        // for single offset children too, otherwise the line dangles. Span
+        // from parentMidX through the full children range.
+        const bracketLeft  = Math.min(parentMidX, ...childCs);
+        const bracketRight = Math.max(parentMidX, ...childCs);
         return {
           id: f.id,
           stem: { x1: parentMidX, y1: parentBottom, x2: parentMidX, y2: bracketY },
           bracket:
-            childCs.length > 1
-              ? { x1: Math.min(...childCs), y1: bracketY, x2: Math.max(...childCs), y2: bracketY }
+            bracketRight - bracketLeft > 0.5
+              ? { x1: bracketLeft, y1: bracketY, x2: bracketRight, y2: bracketY }
               : null,
           drops: childCs.map((cxx) => ({ x1: cxx, y1: bracketY, x2: cxx, y2: childTopY })),
         };
@@ -320,12 +325,16 @@ export function layoutPedigree(gedcomx, opts = {}) {
         const childLeftX = byId[f.children[0]].x;
         const bracketX = parentRight + (childLeftX - parentRight) * 0.55;
         const childCs = f.children.map((c) => byId[c].y + PERSON_H / 2);
+        // Same fix in horizontal direction: bracket must span parentMidY
+        // through all children's y positions to keep the line continuous.
+        const bracketTop    = Math.min(parentMidY, ...childCs);
+        const bracketBottom = Math.max(parentMidY, ...childCs);
         return {
           id: f.id,
           stem: { x1: parentRight, y1: parentMidY, x2: bracketX, y2: parentMidY },
           bracket:
-            childCs.length > 1
-              ? { x1: bracketX, y1: Math.min(...childCs), x2: bracketX, y2: Math.max(...childCs) }
+            bracketBottom - bracketTop > 0.5
+              ? { x1: bracketX, y1: bracketTop, x2: bracketX, y2: bracketBottom }
               : null,
           drops: childCs.map((cyy) => ({ x1: bracketX, y1: cyy, x2: childLeftX, y2: cyy })),
         };

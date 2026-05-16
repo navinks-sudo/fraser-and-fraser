@@ -17,12 +17,17 @@ class User(Base):
 
 class Project(Base):
     __tablename__ = "projects"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
     status = Column(String, default="active")
+    # 'single_family' = every uploaded cert auto-joins one named family group.
+    # 'mixed'         = standard flow, run auto-detection after Process all.
+    research_mode = Column(String, default="mixed")
+    # Used as the family-group label when research_mode == 'single_family'
+    family_label = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -66,7 +71,12 @@ class Image(Base):
     region_data = Column(Text, nullable=True)
     file_type = Column(String, default="image")  # "image" | "spreadsheet"
     spreadsheet_data = Column(Text, nullable=True)  # JSON of {sheets: [{name, columns, rows}]}
+    rotation = Column(Integer, default=0)           # 0/90/180/270 degrees CW
     sort_order = Column(Integer, default=0)
+    # Family-group membership: null = standalone; same string = same family.
+    # Populated by the auto-detection / user-confirm flow.
+    family_group_id = Column(String, nullable=True, index=True)
+    family_group_label = Column(String, nullable=True)  # human-friendly e.g. "Clifford family"
     created_at = Column(DateTime, default=datetime.utcnow)
     
     batch = relationship("Batch", back_populates="images")

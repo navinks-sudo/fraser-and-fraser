@@ -7,13 +7,12 @@ from backend.database import get_db
 from backend.models import Image, OCRText
 from backend.services.textiq_service import TextIQService
 from backend.services.segment_service import SegmentService
-from backend.services.translation_service import TranslationService
+from backend.services.ai_service import ai_service
 from backend.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/projects/{project_id}/batches/{batch_id}/textiq", tags=["textiq"])
 textiq_service = TextIQService()
 segment_service = SegmentService()
-translation_service = TranslationService()
 
 @router.post("/{image_id}/process")
 async def process_ocr(
@@ -252,7 +251,7 @@ async def translate_ocr(
         raise HTTPException(status_code=400, detail="No text to translate.")
 
     try:
-        result_data = await translation_service.translate_to_english(text_to_translate)
+        result_data = await ai_service.translate_to_english(text_to_translate)
     except (APIConnectionError, APITimeoutError) as e:
         raise HTTPException(
             status_code=503,

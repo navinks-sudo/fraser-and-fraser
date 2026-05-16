@@ -18,6 +18,7 @@ class BatchResponse(BatchBase):
     project_id: int
     status: str
     image_count: int
+    tree_built_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

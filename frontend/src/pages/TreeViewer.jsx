@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../api/axios';
-import StageProgress from '../components/Layout/StageProgress';
+import api, { assetUrl, apiUrl } from '../api/axios';
+import { Home as HomeIcon } from 'lucide-react';
 import { gedcomxToD3 } from '../utils/gedcomxToD3';
 import PedigreeChart from '../components/Tree/PedigreeChart';
 import Tree from 'react-d3-tree';
@@ -11,13 +11,27 @@ import {
   User, UserRound, Heart, TreeDeciduous, Users, HelpCircle, Sparkles,
   X, Calendar, MapPin, Briefcase, ArrowUpRight,
   Edit3, Save, Trash2, Plus, ImageIcon, Eye, EyeOff, Download,
-  ArrowDown, ArrowRight,
+  ArrowDown, ArrowRight, FileDown, Share2, ExternalLink, Check, Image as ImgIcon,
 } from 'lucide-react';
 
+// Trigger a browser download for a blob URL with the given filename.
+const _triggerDownload = (href, filename) => {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    if (href.startsWith('blob:')) URL.revokeObjectURL(href);
+  }, 100);
+};
+
 const GENDER_PALETTE = {
-  M: { ring: '#2563EB', soft: '#DBEAFE', deep: '#1D4ED8', label: 'Male' },
-  F: { ring: '#DB2777', soft: '#FCE7F3', deep: '#9D174D', label: 'Female' },
-  U: { ring: '#94A3B8', soft: '#F1F5F9', deep: '#475569', label: 'Unknown' },
+  M: { ring: '#142849', soft: '#DDE3ED', deep: '#0B1F3A', label: 'Male' },
+  F: { ring: '#E25E10', soft: '#FDEADA', deep: '#7C2F06', label: 'Female' },
+  U: { ring: '#8A8470', soft: '#EFEBE1', deep: '#5B6478', label: 'Unknown' },
 };
 
 const GenderIcon = ({ gender, size = 28, color }) => {
@@ -35,12 +49,23 @@ const TreeViewer = () => {
   const { project_id, batch_id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
 
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  // Zoom & pan state lives inside PedigreeChart's TransformWrapper; we control
+  // it via chartRef below. These two leftovers stay as no-ops to avoid
+  // refactoring the older `<Tree>` fallback paths (unused in image mode).
+  const [zoom] = useState(DEFAULT_ZOOM);                    // legacy — unused by PedigreeChart
   const [translate, setTranslate] = useState({ x: 400, y: 120 });
-  const [mode, setMode] = useState('batch'); // 'batch' (Gemini) | 'record' (per-image)
-  const [direction, setDirection] = useState('vertical'); // 'vertical' | 'horizontal'
+  // Tree view modes:
+  //   'image' — current image only (clean family unit per certificate)
+  //   'group' — merged tree across every certificate in the current image's
+  //             family group (only available if the image has a group_id)
+  // Initial value comes from ?mode= so deep-links from the workspace panel
+  // can pre-select group view.
+  const initialMode = searchParams.get('mode') === 'group' ? 'group' : 'image';
+  const [mode, setMode] = useState(initialMode);
+  const [direction, setDirection] = useState('vertical');
   const [selectedNode, setSelectedNode] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [editedGedcomx, setEditedGedcomx] = useState(null);   // local edits before save
@@ -54,11 +79,28 @@ const TreeViewer = () => {
     return () => window.removeEventListener('resize', recenter);
   }, []);
 
-  const handleZoomIn = () => setZoom((z) => Math.min(+(z + ZOOM_STEP).toFixed(2), ZOOM_MAX));
-  const handleZoomOut = () => setZoom((z) => Math.max(+(z - ZOOM_STEP).toFixed(2), ZOOM_MIN));
+  // Imperative handle on the PedigreeChart so the floating dock can drive
+  // its internal TransformWrapper (the chart owns the zoom/pan state).
+  const chartRef = useRef(null);
+  const [zoomDisplay, setZoomDisplay] = useState(70);  // % shown in the dock
+
+  const refreshZoomDisplay = () => {
+    const s = chartRef.current?.getScale?.();
+    if (typeof s === 'number') setZoomDisplay(Math.round(s * 100));
+  };
+
+  const handleZoomIn = () => {
+    chartRef.current?.zoomIn?.(0.2);
+    // Poll for the new scale once the animation completes
+    setTimeout(refreshZoomDisplay, 250);
+  };
+  const handleZoomOut = () => {
+    chartRef.current?.zoomOut?.(0.2);
+    setTimeout(refreshZoomDisplay, 250);
+  };
   const handleZoomReset = () => {
-    setZoom(DEFAULT_ZOOM);
-    setTranslate({ x: window.innerWidth / 2, y: 100 });
+    chartRef.current?.reset?.();
+    setTimeout(refreshZoomDisplay, 350);
   };
 
   const { data: images } = useQuery({
@@ -69,19 +111,32 @@ const TreeViewer = () => {
     }
   });
 
+  // Honour ?image=N — once images are loaded, jump the carousel to the
+  // image whose id matches the URL param. Only runs once per image-load.
+  const wantedImageId = parseInt(searchParams.get('image') || '0', 10);
+  useEffect(() => {
+    if (!images?.length || !wantedImageId) return;
+    const idx = images.findIndex((im) => im.id === wantedImageId);
+    if (idx >= 0 && idx !== currentImageIndex) setCurrentImageIndex(idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, wantedImageId]);
+
   const currentImage = images?.[currentImageIndex];
 
-  // Per-image tree (legacy — uses local deterministic builder)
-  const { data: recordTreeData, isLoading: isRecordLoading } = useQuery({
-    queryKey: ['tree', currentImage?.id],
+  // Per-image deterministic tree — fresh build from just this image's record.
+  // Returns { tree: d3-hierarchy, gedcomx: {...}, persons_count, relationships_count }
+  const { data: imageTreePayload, isLoading: isImageLoading } = useQuery({
+    queryKey: ['image-tree', currentImage?.id],
     queryFn: async () => {
-      const response = await api.get(`/projects/${project_id}/batches/${batch_id}/treeviewer/${currentImage.id}`);
+      const response = await api.get(
+        `/projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}`,
+      );
       return response.data;
     },
-    enabled: !!currentImage && mode === 'record',
+    enabled: !!currentImage && mode === 'image',
   });
 
-  // Whole-batch Gemini-built tree (d3 hierarchy)
+  // Whole-batch tree (deterministic + optional AI enhancement)
   const { data: batchTreePayload, isLoading: isBatchLoading } = useQuery({
     queryKey: ['batch-tree', batch_id],
     queryFn: async () => {
@@ -101,15 +156,18 @@ const TreeViewer = () => {
     enabled: mode === 'batch',
   });
 
-  // Per-record GedcomX (record mode) — pulls the saved GedcomX for the current image
-  const { data: recordGedcomxRaw } = useQuery({
-    queryKey: ['record-gedcomx', currentImage?.id],
+  // Merged tree for the current image's family group (only when in 'group'
+  // mode AND the current image actually has a family_group_id).
+  const groupId = currentImage?.family_group_id || null;
+  const { data: groupTreePayload, isLoading: isGroupLoading } = useQuery({
+    queryKey: ['group-tree', batch_id, groupId],
     queryFn: async () => {
-      if (!currentImage) return null;
-      const res = await api.get(`/projects/${project_id}/batches/${batch_id}/gedcomx/${currentImage.id}`);
-      return res.data;
+      const r = await api.get(
+        `/projects/${project_id}/batches/${batch_id}/tree/group/${groupId}`,
+      );
+      return r.data;
     },
-    enabled: !!currentImage && mode === 'record',
+    enabled: !!groupId && mode === 'group',
   });
 
   const buildTreeMutation = useMutation({
@@ -135,12 +193,125 @@ const TreeViewer = () => {
     onError: (err) => alert(err?.response?.data?.detail || err.message),
   });
 
-  // The "working" GedcomX powering the chart. Editable in batch mode (edits go to
-  // editedGedcomx). In record mode it's the per-image saved GedcomX, read-only.
+  // Save the per-image tree to the database (persists any edits).
+  const saveImageTreeMutation = useMutation({
+    mutationFn: async (gedcomx) =>
+      api.put(`/projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}/save`, { gedcomx }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['image-tree', currentImage?.id] });
+      // Show toast-style feedback
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2500);
+    },
+    onError: (err) => alert(err?.response?.data?.detail || err.message),
+  });
+
+  // Push the current image's GedcomX to an external webhook.
+  const webhookMutation = useMutation({
+    mutationFn: async ({ url, format }) =>
+      api.post(`/projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}/webhook`, { url, format }),
+    onError: (err) => alert(err?.response?.data?.detail || err.message),
+  });
+
+  // UI state for the toolbar dropdowns + flash
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    if (!exportMenuOpen && !connectMenuOpen) return;
+    const onClick = (e) => {
+      if (!e.target.closest('[data-toolbar-menu]')) {
+        setExportMenuOpen(false);
+        setConnectMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [exportMenuOpen, connectMenuOpen]);
+
+  // Download the current pedigree as PNG or SVG.
+  // We specifically target the .pedigree-svg element (set in PedigreeChart),
+  // never any random lucide icon SVG that happens to be on the page.
+  const downloadSnapshot = (fmt /* 'png' | 'svg' */) => {
+    const baseSvg = document.querySelector('svg.pedigree-svg, svg[data-pedigree="root"]');
+    if (!baseSvg) {
+      alert('Could not find the family-tree SVG to export.\n\nMake sure the tree is rendered on screen before clicking Export.');
+      return;
+    }
+
+    // Figure out the natural pedigree dimensions. PedigreeChart sets
+    // width/height attributes AND a matching viewBox, so any of these is fine;
+    // we use baseVal so CSS transforms (zoom/pan wrapper) don't affect output.
+    const w =
+      (baseSvg.viewBox?.baseVal?.width)  ||
+      (baseSvg.width  && baseSvg.width.baseVal && baseSvg.width.baseVal.value)  ||
+      baseSvg.getBoundingClientRect().width ||
+      1600;
+    const h =
+      (baseSvg.viewBox?.baseVal?.height) ||
+      (baseSvg.height && baseSvg.height.baseVal && baseSvg.height.baseVal.value) ||
+      baseSvg.getBoundingClientRect().height ||
+      1200;
+
+    // Clone, normalise, inline a paper background.
+    const cloned = baseSvg.cloneNode(true);
+    cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    cloned.setAttribute('width', String(w));
+    cloned.setAttribute('height', String(h));
+    cloned.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('width', String(w));
+    bg.setAttribute('height', String(h));
+    bg.setAttribute('fill', '#F8F6F1');
+    cloned.insertBefore(bg, cloned.firstChild);
+    const svgStr = new XMLSerializer().serializeToString(cloned);
+
+    const filenameBase = (currentImage?.original_filename || 'family-tree').replace(/\.[^.]+$/, '');
+
+    if (fmt === 'svg') {
+      const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+      _triggerDownload(URL.createObjectURL(blob), `${filenameBase}.svg`);
+      return;
+    }
+
+    // PNG: rasterise the SVG into a canvas at 2× DPI for crisp print quality.
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.max(64, Math.round(w * scale));
+      canvas.height = Math.max(64, Math.round(h * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#F8F6F1';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((pngBlob) => {
+        if (!pngBlob) return alert('PNG render failed.');
+        _triggerDownload(URL.createObjectURL(pngBlob), `${filenameBase}.png`);
+      }, 'image/png');
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      console.error('snapshot img.onerror', e);
+      alert('PNG render failed loading SVG. Try the SVG snapshot instead.');
+    };
+    img.src = url;
+  };
+
+  // The "working" GedcomX powering the chart.
+  //   - batch mode: editable, sourced from the batch tree
+  //   - image mode: deterministic per-image build, read-only
+  //   - group mode: deterministic merged build across the family group, read-only
   const workingGedcomx =
-    mode === 'batch'
-      ? (editedGedcomx || gedcomxPayload?.gedcomx || null)
-      : (recordGedcomxRaw || null);
+    mode === 'batch' ? (editedGedcomx || gedcomxPayload?.gedcomx || null)
+    : mode === 'group' ? (groupTreePayload?.gedcomx || null)
+    : (imageTreePayload?.gedcomx || null);
   const hasUnsavedEdits = !!editedGedcomx;
 
   const cloneGedcomx = () =>
@@ -247,8 +418,14 @@ const TreeViewer = () => {
     ? gedcomxToD3(editedGedcomx)
     : batchTreePayload?.tree;
 
-  const treeData = mode === 'batch' ? liveBatchTree : recordTreeData;
-  const isLoading = mode === 'batch' ? isBatchLoading : isRecordLoading;
+  const treeData =
+    mode === 'batch' ? liveBatchTree
+    : mode === 'group' ? groupTreePayload?.tree
+    : imageTreePayload?.tree;
+  const isLoading =
+    mode === 'batch' ? isBatchLoading
+    : mode === 'group' ? isGroupLoading
+    : isImageLoading;
 
   const handleNext = () => {
     if (currentImageIndex < images.length - 1) {
@@ -284,10 +461,10 @@ const TreeViewer = () => {
         <g style={{ fontFamily: fontStack }}>
           <rect
             width="320" height="64" x="-160" y="-32" rx="32"
-            fill="#1E3A8A" stroke="#1E3A8A"
-            style={{ filter: 'drop-shadow(0 6px 10px rgba(15,23,42,0.18))' }}
+            fill="#0B1F3A" stroke="#0B1F3A"
+            style={{ filter: 'drop-shadow(0 6px 10px rgba(11,31,58,0.25))' }}
           />
-          <g transform="translate(-138,-14)" color="#DBEAFE">
+          <g transform="translate(-138,-14)" color="#F7AE74">
             <TreeDeciduous size={28} strokeWidth={1.8} />
           </g>
           <text fill="#FFFFFF" x="14" y="6" textAnchor="middle"
@@ -304,8 +481,8 @@ const TreeViewer = () => {
       const motherName = a.motherName || nodeDatum.name?.split(' & ')[1] || 'Mother';
       const fp = GENDER_PALETTE[a.fatherGender || 'M'] || GENDER_PALETTE.M;
       const mp = GENDER_PALETTE[a.motherGender || 'F'] || GENDER_PALETTE.F;
-      const cardFill = isPrimary ? '#EFF6FF' : '#FFFFFF';
-      const cardStroke = isPrimary ? '#1D4ED8' : '#CBD5E1';
+      const cardFill = isPrimary ? '#FDEADA' : '#FFFFFF';
+      const cardStroke = isPrimary ? '#E25E10' : '#D9D2C1';
       const cardStrokeW = isPrimary ? 2.5 : 1.5;
       return (
         <g style={{ fontFamily: fontStack, cursor: 'pointer' }} onClick={onNodeClick}>
@@ -319,7 +496,7 @@ const TreeViewer = () => {
           <g transform="translate(-74,-30)" style={{ color: fp.deep }}>
             <User size={16} strokeWidth={1.8} />
           </g>
-          <text x="-46" y="-18" fill="#0F172A" style={{ fontSize: 11.5, fontWeight: 400, letterSpacing: '-0.005em' }}>
+          <text x="-46" y="-18" fill="#0B1F3A" style={{ fontSize: 11.5, fontWeight: 500, letterSpacing: '-0.005em' }}>
             {fatherName}
           </text>
 
@@ -328,16 +505,16 @@ const TreeViewer = () => {
           <g transform="translate(-74,2)" style={{ color: mp.deep }}>
             <UserRound size={16} strokeWidth={1.8} />
           </g>
-          <text x="-46" y="14" fill="#0F172A" style={{ fontSize: 11.5, fontWeight: 400, letterSpacing: '-0.005em' }}>
+          <text x="-46" y="14" fill="#0B1F3A" style={{ fontSize: 11.5, fontWeight: 500, letterSpacing: '-0.005em' }}>
             {motherName}
           </text>
 
           {/* heart + couple label */}
-          <g transform="translate(60,-32)" style={{ color: '#DB2777' }}>
-            <Heart size={14} fill="#DB2777" strokeWidth={1.5} />
+          <g transform="translate(60,-32)" style={{ color: '#E25E10' }}>
+            <Heart size={14} fill="#E25E10" strokeWidth={1.5} />
           </g>
-          <text x="0" y="36" textAnchor="middle" fill="#94A3B8"
-                style={{ fontSize: 8.5, fontWeight: 500, letterSpacing: '0.22em', textTransform: 'uppercase' }}>
+          <text x="0" y="36" textAnchor="middle" fill="#8A8470"
+                style={{ fontSize: 8.5, fontWeight: 600, letterSpacing: '0.22em', textTransform: 'uppercase' }}>
             Couple
           </text>
         </g>
@@ -348,10 +525,10 @@ const TreeViewer = () => {
     if (isOther) {
       return (
         <g style={{ fontFamily: fontStack, cursor: 'pointer' }} onClick={onNodeClick}>
-          <circle r="34" fill="#F1F5F9" stroke="#CBD5E1" strokeWidth="2" strokeDasharray="4 3" />
-          <g transform="translate(-14,-14)" color="#475569"><Users size={28} strokeWidth={1.8} /></g>
-          <text fill="#0F172A" x="0" y="54" textAnchor="middle"
-                style={{ fontSize: 12, fontWeight: 400 }}>{nodeDatum.name}</text>
+          <circle r="34" fill="#EFEBE1" stroke="#D9D2C1" strokeWidth="2" strokeDasharray="4 3" />
+          <g transform="translate(-14,-14)" color="#5B6478"><Users size={28} strokeWidth={1.8} /></g>
+          <text fill="#0B1F3A" x="0" y="54" textAnchor="middle"
+                style={{ fontSize: 12, fontWeight: 500 }}>{nodeDatum.name}</text>
         </g>
       );
     }
@@ -360,30 +537,30 @@ const TreeViewer = () => {
     const g = a.gender || 'U';
     const palette = GENDER_PALETTE[g] || GENDER_PALETTE.U;
     const ringWidth = isPrimary ? 4 : 2.5;
-    const ringColor = isPrimary ? '#1E3A8A' : palette.ring;
+    const ringColor = isPrimary ? '#E25E10' : palette.ring;
     return (
       <g style={{ fontFamily: fontStack, cursor: 'pointer' }} onClick={onNodeClick}>
         {isPrimary && (
-          <circle r="38" fill="none" stroke="#2563EB" strokeWidth="1.5" strokeDasharray="3 3" opacity="0.6" />
+          <circle r="38" fill="none" stroke="#E25E10" strokeWidth="1.5" strokeDasharray="3 3" opacity="0.7" />
         )}
         <circle r="28" fill={palette.soft} stroke={ringColor} strokeWidth={ringWidth}
-                style={{ filter: 'drop-shadow(0 3px 5px rgba(15,23,42,0.1))' }} />
+                style={{ filter: 'drop-shadow(0 3px 5px rgba(11,31,58,0.12))' }} />
         <g transform="translate(-14,-14)" style={{ color: palette.deep }}>
           <GenderIcon gender={g} size={28} color={palette.deep} />
         </g>
-        <text fill="#0F172A" x="0" y="48" textAnchor="middle"
-              style={{ fontSize: 12, fontWeight: 400, letterSpacing: '-0.005em' }}>
+        <text fill="#0B1F3A" x="0" y="48" textAnchor="middle"
+              style={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.005em' }}>
           {nodeDatum.name}
         </text>
         {relation && (
           <text fill={palette.deep} x="0" y="62" textAnchor="middle"
-                style={{ fontSize: 9.5, fontWeight: 400, fontStyle: 'italic', letterSpacing: '0.01em' }}>
+                style={{ fontSize: 9.5, fontWeight: 500, fontStyle: 'italic', letterSpacing: '0.01em' }}>
             {relation}
           </text>
         )}
         {isPrimary && (
-          <text fill="#1E3A8A" x="0" y="-44" textAnchor="middle"
-                style={{ fontSize: 8.5, fontWeight: 500, letterSpacing: '0.22em', textTransform: 'uppercase' }}>
+          <text fill="#E25E10" x="0" y="-44" textAnchor="middle"
+                style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase' }}>
             Subject
           </text>
         )}
@@ -393,51 +570,98 @@ const TreeViewer = () => {
 
   return (
     <div className="flex flex-col h-screen bg-surface-canvas">
-      <StageProgress />
-      
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* ── Slim top bar: identity · mode toggle · primary CTA ───────── */}
         <div className="p-3 bg-surface border-b border-line flex justify-between items-center gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Quick navigation */}
+            <button
+              onClick={() => navigate('/dashboard')}
+              title="Back to dashboard"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-orange-50 hover:text-orange-600 transition-colors"
+            >
+              <HomeIcon size={16} />
+            </button>
+            <button
+              onClick={() => navigate(`/projects/${project_id}/batches/${batch_id}`)}
+              title="Back to workspace"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-orange-50 hover:text-orange-600 transition-colors"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div className="w-px h-6 bg-line-subtle mx-1" />
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-amber to-brand-amber-dark flex items-center justify-center text-white shadow-warm-sm shrink-0">
               <Network size={18} />
             </div>
             <div className="min-w-0">
               <h2 className="font-display font-bold text-base leading-tight text-ink truncate">
-                Family Tree
+                {mode === 'group' && groupTreePayload
+                  ? groupTreePayload.label
+                  : (currentImage?.original_filename || 'Family tree')}
               </h2>
               <div className="text-[11px] text-ink-tertiary truncate">
-                {mode === 'batch' && batchTreePayload
-                  ? `${batchTreePayload.persons_count} persons · ${batchTreePayload.relationships_count} relationships`
-                  : mode === 'record'
-                  ? currentImage?.original_filename
-                  : 'No AI tree built yet'}
+                {mode === 'group' && groupTreePayload
+                  ? `${groupTreePayload.persons_count} persons · ${groupTreePayload.relationships_count} relationships · ${groupTreePayload.image_ids?.length || 0} certificates merged`
+                  : imageTreePayload
+                    ? `${imageTreePayload.persons_count} persons · ${imageTreePayload.relationships_count} relationships in this image`
+                    : 'Loading image tree…'}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Mode segmented control */}
-            <div className="flex bg-surface-sunken rounded-full p-0.5 shadow-warm-xs">
-              <button
-                onClick={() => setMode('batch')}
-                className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
-                  mode === 'batch' ? 'bg-brand-amber text-white shadow-warm-sm' : 'text-ink-secondary hover:text-ink'
-                }`}
-                title="Whole-batch tree built by Gemini"
+            {/* Per-image vs Family-group view toggle — only shown when the
+                current image belongs to a family group. */}
+            {currentImage?.family_group_id && (
+              <div
+                className="flex bg-surface-sunken rounded-full p-0.5 shadow-warm-xs"
+                style={{ borderLeft: `3px solid ${currentImage.family_group_label ? '#E25E10' : 'transparent'}` }}
               >
-                Whole batch
-              </button>
-              <button
-                onClick={() => setMode('record')}
-                className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
-                  mode === 'record' ? 'bg-brand-amber text-white shadow-warm-sm' : 'text-ink-secondary hover:text-ink'
-                }`}
-                title="Per-record tree"
-              >
-                Per record
-              </button>
-            </div>
+                <button
+                  onClick={() => setMode('image')}
+                  title="Show only this certificate's family unit"
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-full transition-all flex items-center gap-1 ${
+                    mode === 'image' ? 'bg-navy-800 text-white shadow-warm-sm' : 'text-ink-secondary hover:text-ink'
+                  }`}
+                >
+                  <ImageIcon size={12} /> This certificate
+                </button>
+                <button
+                  onClick={() => setMode('group')}
+                  title={`Show the merged family tree across all certificates in ${currentImage.family_group_label || 'this family'}`}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-full transition-all flex items-center gap-1 ${
+                    mode === 'group' ? 'bg-orange-500 text-white shadow-warm-sm' : 'text-ink-secondary hover:text-ink'
+                  }`}
+                >
+                  <Users size={12} /> {currentImage.family_group_label || 'Family group'}
+                </button>
+              </div>
+            )}
+
+            {/* Per-image navigation */}
+            {images?.length > 0 && (
+              <div className="flex items-center gap-1 bg-surface-sunken rounded-full p-0.5 shadow-warm-xs">
+                <button
+                  onClick={handlePrev}
+                  disabled={currentImageIndex === 0}
+                  className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface disabled:opacity-30 transition-colors"
+                  title="Previous image"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="text-[11px] font-semibold tabular-nums text-ink-secondary px-1.5">
+                  {currentImageIndex + 1}/{images.length}
+                </span>
+                <button
+                  onClick={handleNext}
+                  disabled={currentImageIndex >= (images.length - 1)}
+                  className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface disabled:opacity-30 transition-colors"
+                  title="Next image"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
 
             {/* Layout direction toggle */}
             <div className="flex bg-surface-sunken rounded-full p-0.5 shadow-warm-xs">
@@ -461,18 +685,112 @@ const TreeViewer = () => {
               </button>
             </div>
 
-            {/* Primary CTA — Build with AI (batch mode only) */}
-            {mode === 'batch' && (
-              <button
-                onClick={() => buildTreeMutation.mutate()}
-                disabled={buildTreeMutation.isPending || editMode}
-                className="text-xs py-2 px-3.5 rounded-full bg-gradient-to-r from-brand-amber to-brand-amber-dark text-white shadow-warm-md hover:shadow-warm-lg hover:-translate-y-0.5 transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:translate-y-0 disabled:hover:shadow-warm-md font-semibold"
-                title="Use Gemini to dedupe persons across all records and infer the full relationship graph"
-              >
-                <Sparkles size={14} />
-                {buildTreeMutation.isPending ? 'Building…' : 'Build with AI'}
-              </button>
+            {/* ── Save / Export / Connect — only meaningful when a tree exists ── */}
+            {workingGedcomx && currentImage && (
+              <>
+                {/* Save */}
+                <button
+                  onClick={() => saveImageTreeMutation.mutate(workingGedcomx)}
+                  disabled={saveImageTreeMutation.isPending}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-all ${
+                    savedFlash
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-navy-800 hover:bg-navy-900 text-white shadow-warm-sm'
+                  } disabled:opacity-60`}
+                  title="Save this image's family tree to the database"
+                >
+                  {savedFlash ? <Check size={12} strokeWidth={3} /> : <Save size={12} />}
+                  {saveImageTreeMutation.isPending ? 'Saving…' : savedFlash ? 'Saved' : 'Save'}
+                </button>
+
+                {/* Export menu */}
+                <div className="relative" data-toolbar-menu>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setExportMenuOpen((v) => !v); setConnectMenuOpen(false); }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full bg-surface border border-line hover:bg-surface-raised text-navy-800 transition-colors"
+                    title="Download this family tree in various formats"
+                  >
+                    <Download size={12} />
+                    Export
+                  </button>
+                  {exportMenuOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-[280px] bg-surface border border-line-subtle shadow-warm-lg rounded-md py-1 z-40">
+                      <div className="px-4 py-2 text-[10px] uppercase tracking-[0.22em] text-ink-tertiary font-bold border-b border-line-subtle">
+                        This image's family tree
+                      </div>
+                      <a
+                        href={apiUrl(`projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}/export.ged`)}
+                        target="_blank" rel="noreferrer"
+                        onClick={() => setExportMenuOpen(false)}
+                        className="flex items-start gap-3 px-4 py-2.5 hover:bg-orange-50 transition-colors"
+                      >
+                        <FileDown size={14} className="text-navy-800 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-[13px] font-bold text-navy-800">GEDCOM 5.5 (.ged)</div>
+                          <div className="text-[10px] text-ink-tertiary">FamilySearch · Ancestry · MyHeritage · Gramps</div>
+                        </div>
+                      </a>
+                      <a
+                        href={apiUrl(`projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}/export.json`)}
+                        target="_blank" rel="noreferrer"
+                        onClick={() => setExportMenuOpen(false)}
+                        className="flex items-start gap-3 px-4 py-2.5 hover:bg-orange-50 transition-colors border-t border-line-subtle"
+                      >
+                        <FileDown size={14} className="text-navy-800 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-[13px] font-bold text-navy-800">GedcomX JSON</div>
+                          <div className="text-[10px] text-ink-tertiary">Modern genealogy format · for developers</div>
+                        </div>
+                      </a>
+                      <button
+                        onClick={() => { downloadSnapshot('png'); setExportMenuOpen(false); }}
+                        className="w-full text-left flex items-start gap-3 px-4 py-2.5 hover:bg-orange-50 transition-colors border-t border-line-subtle"
+                      >
+                        <ImgIcon size={14} className="text-navy-800 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-[13px] font-bold text-navy-800">PNG snapshot</div>
+                          <div className="text-[10px] text-ink-tertiary">Retina-quality raster — for sharing / print</div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => { downloadSnapshot('svg'); setExportMenuOpen(false); }}
+                        className="w-full text-left flex items-start gap-3 px-4 py-2.5 hover:bg-orange-50 transition-colors border-t border-line-subtle"
+                      >
+                        <ImgIcon size={14} className="text-navy-800 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-[13px] font-bold text-navy-800">SVG snapshot</div>
+                          <div className="text-[10px] text-ink-tertiary">Vector — editable in Illustrator / Figma</div>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Connect to external app */}
+                <div className="relative" data-toolbar-menu>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setConnectMenuOpen((v) => !v); setExportMenuOpen(false); }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full bg-orange-500 hover:bg-orange-600 text-white transition-colors"
+                    title="Send this family tree to an external genealogy app"
+                  >
+                    <Share2 size={12} />
+                    Connect
+                  </button>
+                  {connectMenuOpen && (
+                    <ConnectMenu
+                      onClose={() => setConnectMenuOpen(false)}
+                      onWebhook={(url, format) => webhookMutation.mutate({ url, format })}
+                      webhookPending={webhookMutation.isPending}
+                      onCopyGedcomLink={() => {
+                        const link = apiUrl(`projects/${project_id}/batches/${batch_id}/tree/image/${currentImage.id}/export.ged`);
+                        navigator.clipboard?.writeText(link);
+                      }}
+                    />
+                  )}
+                </div>
+              </>
             )}
+
           </div>
         </div>
 
@@ -498,27 +816,25 @@ const TreeViewer = () => {
           <div className="absolute bottom-4 right-4 z-30 flex flex-col bg-surface/95 backdrop-blur rounded-xl border border-line shadow-warm-lg overflow-hidden">
             <button
               onClick={handleZoomIn}
-              disabled={zoom >= ZOOM_MAX}
-              className="w-10 h-10 flex items-center justify-center hover:bg-surface-raised disabled:opacity-40 transition-colors border-b border-line-subtle"
-              title="Zoom in"
+              className="w-10 h-10 flex items-center justify-center hover:bg-orange-50 hover:text-orange-600 transition-colors border-b border-line-subtle text-navy-800"
+              title="Zoom in (or use mouse wheel)"
             >
               <ZoomIn size={16} />
             </button>
             <div className="w-10 h-7 flex items-center justify-center text-[10px] font-semibold text-ink-secondary tabular-nums border-b border-line-subtle bg-surface-raised">
-              {Math.round(zoom * 100)}%
+              {zoomDisplay}%
             </div>
             <button
               onClick={handleZoomOut}
-              disabled={zoom <= ZOOM_MIN}
-              className="w-10 h-10 flex items-center justify-center hover:bg-surface-raised disabled:opacity-40 transition-colors border-b border-line-subtle"
-              title="Zoom out"
+              className="w-10 h-10 flex items-center justify-center hover:bg-orange-50 hover:text-orange-600 transition-colors border-b border-line-subtle text-navy-800"
+              title="Zoom out (or use mouse wheel)"
             >
               <ZoomOut size={16} />
             </button>
             <button
               onClick={handleZoomReset}
-              className="w-10 h-10 flex items-center justify-center hover:bg-surface-raised transition-colors"
-              title="Reset view"
+              className="w-10 h-10 flex items-center justify-center hover:bg-orange-50 hover:text-orange-600 transition-colors text-navy-800"
+              title="Reset view (fit to screen)"
             >
               <Maximize2 size={16} />
             </button>
@@ -530,6 +846,7 @@ const TreeViewer = () => {
             </div>
           ) : workingGedcomx ? (
             <PedigreeChart
+              ref={chartRef}
               gedcomx={workingGedcomx}
               direction={direction}
               selectedId={selectedNode?.attributes?.id}
@@ -576,13 +893,19 @@ const TreeViewer = () => {
           )}
         </div>
 
-        {mode === 'record' && (
-          <div className="p-4 bg-surface border-t border-line flex justify-center gap-4">
+        {mode === 'image' && images?.length > 0 && (
+          <div className="p-4 bg-surface border-t border-line flex items-center justify-between gap-4">
             <button onClick={handlePrev} disabled={currentImageIndex === 0} className="btn-secondary py-2 flex items-center gap-2">
-              <ChevronLeft size={18} /> Previous Record
+              <ChevronLeft size={18} /> Previous image
             </button>
-            <button onClick={handleNext} disabled={currentImageIndex === images?.length - 1} className="btn-secondary py-2 flex items-center gap-2">
-              Next Record <ChevronRight size={18} />
+            <div className="text-[12px] text-ink-tertiary text-center">
+              <div className="font-mono truncate max-w-[400px]">{currentImage?.original_filename}</div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-ink-tertiary/70 mt-0.5">
+                {currentImageIndex + 1} of {images.length}
+              </div>
+            </div>
+            <button onClick={handleNext} disabled={currentImageIndex >= (images?.length - 1)} className="btn-secondary py-2 flex items-center gap-2">
+              Next image <ChevronRight size={18} />
             </button>
           </div>
         )}
@@ -649,9 +972,9 @@ const TreeViewer = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ─── Insights helpers ──────────────────────────────────────────────────────
 const PALETTE = {
-  M: { ring: '#2563EB', soft: '#DBEAFE', deep: '#1D4ED8' },
-  F: { ring: '#DB2777', soft: '#FCE7F3', deep: '#9D174D' },
-  U: { ring: '#94A3B8', soft: '#F1F5F9', deep: '#475569' },
+  M: { ring: '#142849', soft: '#DDE3ED', deep: '#0B1F3A' },
+  F: { ring: '#E25E10', soft: '#FDEADA', deep: '#7C2F06' },
+  U: { ring: '#8A8470', soft: '#EFEBE1', deep: '#5B6478' },
 };
 const palette = (g) => PALETTE[g] || PALETTE.U;
 
@@ -921,7 +1244,7 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
               : <div className="text-sm text-ink-tertiary italic">No detailed records found for this couple.</div>}
             {familyParents.length === 2 && (
               <div className="text-center text-xs text-ink-tertiary flex items-center justify-center gap-2 py-1">
-                <Heart size={12} className="text-pink-600" fill="#DB2777" /> married
+                <Heart size={12} className="text-orange-600" fill="#E25E10" /> married
               </div>
             )}
             {familyParents.length > 0 && (
@@ -946,9 +1269,9 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
             {lineage && (
               <div className="grid grid-cols-4 gap-2">
                 <StatCard label="parents" value={parents.length} color={palette('U').deep} />
-                <StatCard label="spouses" value={spouses.length} color="#DB2777" />
+                <StatCard label="spouses" value={spouses.length} color="#E25E10" />
                 <StatCard label="children" value={children.length} color={palette('M').deep} />
-                <StatCard label="ancestors" value={lineage.ancestors} sub={`${lineage.maxAncestorDepth} gen up`} color="#0E7490" />
+                <StatCard label="ancestors" value={lineage.ancestors} sub={`${lineage.maxAncestorDepth} gen up`} color="#0B1F3A" />
               </div>
             )}
             {lineage && (lineage.descendants > 0 || places.length > 0) && (
@@ -957,9 +1280,9 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
                   label="descendants"
                   value={lineage.descendants}
                   sub={lineage.maxDescendantDepth ? `${lineage.maxDescendantDepth} gen down` : null}
-                  color="#15803D"
+                  color="#C84F0D"
                 />
-                <StatCard label="places" value={places.length} color="#B45309" />
+                <StatCard label="places" value={places.length} color="#142849" />
               </div>
             )}
 
@@ -1019,7 +1342,7 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {places.map((pl, i) => (
-                        <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-cyan-50 text-cyan-900 border border-cyan-200">{pl}</span>
+                        <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-navy-50 text-navy-800 border border-navy-100">{pl}</span>
                       ))}
                     </div>
                   </div>
@@ -1047,7 +1370,7 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
                 {spouses.length > 0 && (
                   <div>
                     <div className="text-[10px] uppercase tracking-widest text-ink-tertiary font-semibold mb-1.5 flex items-center gap-1">
-                      <Heart size={10} className="text-pink-600" /> Spouse{spouses.length > 1 ? 's' : ''} · {spouses.length}
+                      <Heart size={10} className="text-orange-600" /> Spouse{spouses.length > 1 ? 's' : ''} · {spouses.length}
                     </div>
                     <div className="space-y-1 bg-white border border-line-subtle rounded-lg p-1">
                       {spouses.map((p) => <PersonChip key={p.id} p={p} onClick={() => onJump(p.id)} />)}
@@ -1073,20 +1396,20 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
             {/* ─── Lineage tab — generation depth, ancestor/descendant tally ─── */}
             {tab === 'lineage' && lineage && (
               <div className="space-y-3">
-                <div className="bg-gradient-to-br from-cyan-50 to-blue-50 border border-cyan-100 rounded-xl p-3">
-                  <div className="text-[10px] uppercase tracking-widest text-cyan-800 font-semibold mb-2">Ancestry</div>
+                <div className="bg-gradient-to-br from-navy-50 to-navy-100 border border-navy-100 rounded-xl p-3">
+                  <div className="text-[10px] uppercase tracking-widest text-navy-800 font-semibold mb-2">Ancestry</div>
                   {lineage.ancestors > 0 ? (
                     <>
                       <div className="text-sm text-ink">
-                        <strong className="text-2xl font-display text-cyan-700 mr-1">{lineage.ancestors}</strong>
+                        <strong className="text-2xl font-display text-navy-800 mr-1">{lineage.ancestors}</strong>
                         known ancestor{lineage.ancestors !== 1 ? 's' : ''} traced over{' '}
                         <strong>{lineage.maxAncestorDepth}</strong> generation{lineage.maxAncestorDepth !== 1 ? 's' : ''}
                       </div>
                       <div className="mt-2 flex items-center gap-1">
                         {Array.from({ length: lineage.maxAncestorDepth + 1 }).map((_, i) => (
                           <React.Fragment key={i}>
-                            {i > 0 && <div className="flex-1 h-px bg-cyan-300" />}
-                            <div className="w-2.5 h-2.5 rounded-full bg-cyan-600" />
+                            {i > 0 && <div className="flex-1 h-px bg-navy-300" />}
+                            <div className="w-2.5 h-2.5 rounded-full bg-navy-700" />
                           </React.Fragment>
                         ))}
                       </div>
@@ -1096,20 +1419,20 @@ const NodeDetailPanel = ({ node, gedcomx, onClose, onJump, editMode, onUpdatePer
                   )}
                 </div>
 
-                <div className="bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-100 rounded-xl p-3">
-                  <div className="text-[10px] uppercase tracking-widest text-emerald-800 font-semibold mb-2">Descendants</div>
+                <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-100 rounded-xl p-3">
+                  <div className="text-[10px] uppercase tracking-widest text-orange-700 font-semibold mb-2">Descendants</div>
                   {lineage.descendants > 0 ? (
                     <>
                       <div className="text-sm text-ink">
-                        <strong className="text-2xl font-display text-emerald-700 mr-1">{lineage.descendants}</strong>
+                        <strong className="text-2xl font-display text-orange-600 mr-1">{lineage.descendants}</strong>
                         known descendant{lineage.descendants !== 1 ? 's' : ''} over{' '}
                         <strong>{lineage.maxDescendantDepth}</strong> generation{lineage.maxDescendantDepth !== 1 ? 's' : ''}
                       </div>
                       <div className="mt-2 flex items-center gap-1">
                         {Array.from({ length: lineage.maxDescendantDepth + 1 }).map((_, i) => (
                           <React.Fragment key={i}>
-                            {i > 0 && <div className="flex-1 h-px bg-emerald-300" />}
-                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
+                            {i > 0 && <div className="flex-1 h-px bg-orange-300" />}
+                            <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
                           </React.Fragment>
                         ))}
                       </div>
@@ -1227,9 +1550,9 @@ const DockButton = ({ onClick, icon, label, active, tint, disabled, badge }) => 
   if (active) {
     stateCls = 'bg-brand-amber text-white hover:bg-brand-amber-dark';
   } else if (tint === 'blue') {
-    stateCls = 'bg-blue-50 text-blue-700 hover:bg-blue-100';
+    stateCls = 'bg-orange-50 text-orange-600 hover:bg-orange-100';
   } else if (tint === 'green') {
-    stateCls = 'bg-green-600 text-white hover:bg-green-700';
+    stateCls = 'bg-navy-800 text-white hover:bg-navy-900';
   } else if (tint === 'muted') {
     stateCls = 'bg-surface-sunken text-ink-tertiary';
   }
@@ -1243,7 +1566,7 @@ const DockButton = ({ onClick, icon, label, active, tint, disabled, badge }) => 
       <span className="w-10 h-10 flex items-center justify-center shrink-0 relative">
         {icon}
         {badge && (
-          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
         )}
       </span>
       <span className="text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity max-w-0 group-hover:max-w-[180px] overflow-hidden pr-2">
@@ -1294,9 +1617,9 @@ const PersonEditor = ({ person, onSave, onDelete }) => {
         </label>
         <div className="flex gap-1">
           {[
-            { v: 'M', label: 'Male', color: '#2563EB' },
-            { v: 'F', label: 'Female', color: '#DB2777' },
-            { v: 'U', label: 'Unknown', color: '#94A3B8' },
+            { v: 'M', label: 'Male', color: '#0B1F3A' },
+            { v: 'F', label: 'Female', color: '#E25E10' },
+            { v: 'U', label: 'Unknown', color: '#8A8470' },
           ].map((g) => (
             <button
               key={g.v}
@@ -1359,8 +1682,8 @@ const RelationAdder = ({ person, allPersons, onAdd }) => {
   if (!others.length) return null;
 
   return (
-    <div className="border border-blue-200 bg-blue-50 rounded-xl p-3 space-y-2">
-      <div className="text-[10px] font-bold uppercase tracking-widest text-blue-700 flex items-center gap-1">
+    <div className="border border-navy-100 bg-navy-50 rounded-xl p-3 space-y-2">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-navy-800 flex items-center gap-1">
         <Plus size={11} /> Add a relationship
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1390,7 +1713,7 @@ const RelationAdder = ({ person, allPersons, onAdd }) => {
         type="button"
         onClick={apply}
         disabled={!otherId}
-        className="w-full text-xs py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+        className="w-full text-xs py-1.5 rounded-md bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
       >
         Add relationship
       </button>
@@ -1417,7 +1740,7 @@ const ImageComparePane = ({ images, index, setIndex, onClose }) => {
       <div className="p-3 border-b border-line bg-surface-raised flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
           {isSheet ? (
-            <span className="text-emerald-600 shrink-0 text-lg leading-none">📊</span>
+            <span className="text-orange-600 shrink-0 text-lg leading-none">📊</span>
           ) : (
             <ImageIcon size={16} className="text-brand-amber shrink-0" />
           )}
@@ -1464,7 +1787,7 @@ const ImageComparePane = ({ images, index, setIndex, onClose }) => {
                 : 'Tabular data — not previewable here'}
             </div>
             <a
-              href={`http://localhost:8000/${img.original_path}`}
+              href={assetUrl(img.original_path)}
               target="_blank"
               rel="noreferrer"
               className="btn-secondary text-xs inline-flex items-center gap-1.5"
@@ -1475,7 +1798,7 @@ const ImageComparePane = ({ images, index, setIndex, onClose }) => {
           </div>
         ) : (
           <img
-            src={`http://localhost:8000/${img.enhanced_path || img.original_path}`}
+            src={assetUrl(img.enhanced_path || img.original_path)}
             alt={img.original_filename}
             className="max-w-full mx-auto shadow-warm-md rounded border border-line-subtle"
           />
@@ -1497,12 +1820,12 @@ const ImageComparePane = ({ images, index, setIndex, onClose }) => {
                 title={im.original_filename}
               >
                 {sheet ? (
-                  <div className="w-full h-full bg-gradient-to-br from-emerald-100 to-teal-200 flex items-center justify-center text-xl">
+                  <div className="w-full h-full bg-gradient-to-br from-orange-100 to-orange-300 flex items-center justify-center text-xl">
                     📊
                   </div>
                 ) : (
                   <img
-                    src={`http://localhost:8000/${im.enhanced_path || im.original_path}`}
+                    src={assetUrl(im.enhanced_path || im.original_path)}
                     alt=""
                     className="w-full h-full object-cover"
                   />
@@ -1512,6 +1835,145 @@ const ImageComparePane = ({ images, index, setIndex, onClose }) => {
           })}
         </div>
       )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Connect-to-external-app menu — opens beneath the orange "Connect" button.
+// Offers deep-links to the major genealogy services + a custom-webhook form.
+// ─────────────────────────────────────────────────────────────────────────────
+const ConnectMenu = ({ onClose, onWebhook, webhookPending, onCopyGedcomLink }) => {
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookFmt, setWebhookFmt] = useState('gedcomx');
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    onCopyGedcomLink?.();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
+  // External services that accept an uploaded GEDCOM file. We can't push
+  // directly without each service's OAuth flow, but we can take the user
+  // to the right import page and prompt them to upload the .ged we just
+  // generated — practical and zero-config.
+  const SERVICES = [
+    {
+      name: 'FamilySearch',
+      desc: 'Free · world\'s largest genealogy database',
+      url: 'https://www.familysearch.org/search/family-tree',
+      color: '#0066CC',
+    },
+    {
+      name: 'Ancestry',
+      desc: 'Subscription · biggest commercial tree platform',
+      url: 'https://www.ancestry.com/family-tree/tree/create',
+      color: '#3F8E3D',
+    },
+    {
+      name: 'MyHeritage',
+      desc: 'Hybrid free/paid · strong DNA matching',
+      url: 'https://www.myheritage.com/family-tree',
+      color: '#FF7F00',
+    },
+    {
+      name: 'Gramps',
+      desc: 'Free desktop app · opens .ged directly',
+      url: 'https://gramps-project.org/blog/download/',
+      color: '#7E2F8E',
+    },
+  ];
+
+  return (
+    <div className="absolute right-0 top-full mt-2 w-[360px] bg-surface border border-line-subtle shadow-warm-lg rounded-md z-40 overflow-hidden">
+      <div className="px-4 py-3 border-b border-line-subtle bg-surface-raised flex items-center justify-between">
+        <div>
+          <div className="text-[11px] font-bold tracking-[0.22em] uppercase text-orange-600">Connect</div>
+          <div className="text-[12px] text-ink-secondary mt-0.5">Send this family tree to another app</div>
+        </div>
+        <button onClick={onClose} className="text-ink-tertiary hover:text-ink p-1" title="Close">
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="p-2">
+        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-ink-tertiary px-2 py-1.5">
+          Upload to genealogy services
+        </div>
+        {SERVICES.map((s) => (
+          <a
+            key={s.name}
+            href={s.url}
+            target="_blank"
+            rel="noreferrer"
+            className="group flex items-center gap-3 px-3 py-2 rounded-md hover:bg-orange-50 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-md flex items-center justify-center text-white font-display font-extrabold text-[13px] shrink-0"
+                 style={{ backgroundColor: s.color }}>
+              {s.name[0]}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-bold text-navy-800">{s.name}</div>
+              <div className="text-[10px] text-ink-tertiary truncate">{s.desc}</div>
+            </div>
+            <ExternalLink size={12} className="text-ink-tertiary group-hover:text-orange-500 shrink-0" />
+          </a>
+        ))}
+
+        <div className="mt-2 pt-2 border-t border-line-subtle px-2">
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-ink-tertiary py-1.5">
+            Download first, then upload there
+          </div>
+          <button
+            onClick={handleCopy}
+            className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-md hover:bg-orange-50 transition-colors"
+          >
+            {copied ? <Check size={14} className="text-emerald-600" /> : <Download size={14} className="text-navy-800" />}
+            <div className="flex-1">
+              <div className="text-[12px] font-semibold text-navy-800">
+                {copied ? 'GEDCOM URL copied' : 'Copy GEDCOM download URL'}
+              </div>
+              <div className="text-[10px] text-ink-tertiary">Paste into other tools / scripts</div>
+            </div>
+          </button>
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-line-subtle px-2 pb-1">
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-ink-tertiary py-1.5">
+            Push to custom webhook
+          </div>
+          <div className="space-y-1.5">
+            <input
+              type="url"
+              placeholder="https://your-api.example.com/import"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-[12px] bg-white border border-line rounded focus:outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+            />
+            <div className="flex items-center gap-2">
+              <select
+                value={webhookFmt}
+                onChange={(e) => setWebhookFmt(e.target.value)}
+                className="text-[11px] bg-white border border-line rounded px-2 py-1.5"
+              >
+                <option value="gedcomx">GedcomX JSON</option>
+                <option value="gedcom">GEDCOM 5.5</option>
+              </select>
+              <button
+                onClick={() => onWebhook?.(webhookUrl, webhookFmt)}
+                disabled={!webhookUrl || webhookPending}
+                className="flex-1 text-[11px] font-semibold py-1.5 px-2 rounded bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white"
+              >
+                {webhookPending ? 'Sending…' : 'POST to URL'}
+              </button>
+            </div>
+            <div className="text-[10px] text-ink-tertiary italic">
+              Backend POSTs the tree to your URL with the chosen content-type.
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

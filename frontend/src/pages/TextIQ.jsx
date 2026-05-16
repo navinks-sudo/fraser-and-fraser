@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../api/axios';
+import api, { assetUrl } from '../api/axios';
 import StageProgress from '../components/Layout/StageProgress';
 import {
   FileText, Wand2, Save, ChevronLeft, ChevronRight, RotateCcw,
@@ -295,7 +295,7 @@ const TextIQ = () => {
           <div className="relative inline-block">
             <img
               ref={imgRef}
-              src={`http://localhost:8000/${currentImage?.enhanced_path || currentImage?.original_path}`}
+              src={assetUrl(currentImage?.enhanced_path || currentImage?.original_path)}
               alt="Document"
               className="max-h-[calc(100vh-180px)] max-w-full shadow-lg rounded border border-line-subtle block"
             />

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../api/axios';
+import api, { assetUrl } from '../api/axios';
 import { ArrowLeft, Upload, Image as ImageIcon, Play, CheckCircle2, Trash2, FileSpreadsheet } from 'lucide-react';
 
 const BatchDetail = () => {
@@ -173,7 +173,7 @@ const BatchDetail = () => {
                   <>
                     <div className="absolute inset-0 bg-ink/10 group-hover:bg-transparent transition-colors z-10" />
                     <img
-                      src={`http://localhost:8000/${image.original_path}`}
+                      src={assetUrl(image.original_path)}
                       alt="Thumbnail"
                       className="h-full w-full object-cover"
                     />

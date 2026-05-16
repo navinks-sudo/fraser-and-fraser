@@ -32,6 +32,16 @@ async def upload_images(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
 
+    # Pull the parent project so single-family auto-grouping works on upload.
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalars().first()
+    auto_group_id = None
+    auto_group_label = None
+    if project and getattr(project, "research_mode", "mixed") == "single_family":
+        # Deterministic id so every batch in this project shares the same group
+        auto_group_id = f"fg_proj_{project.id}"
+        auto_group_label = (project.family_label or project.name or "Family").strip()
+
     uploaded_images = []
     for file in files:
         file_bytes = await file.read()
@@ -57,6 +67,8 @@ async def upload_images(
                     original_path=page_path,
                     sort_order=batch.image_count,
                     file_type="image",
+                    family_group_id=auto_group_id,
+                    family_group_label=auto_group_label,
                 )
                 db.add(page_image)
                 batch.image_count += 1
@@ -76,6 +88,8 @@ async def upload_images(
             visionmax_status="skipped" if is_excel else "pending",
             textiq_status="skipped" if is_excel else "pending",
             segment_status="skipped" if is_excel else "pending",
+            family_group_id=auto_group_id,
+            family_group_label=auto_group_label,
         )
 
         if is_excel:
@@ -132,7 +146,10 @@ async def get_images(
             "gedcomx_status": r.gedcomx_status,
             "segment_status": r.segment_status,
             "file_type": r.file_type or "image",
+            "rotation": r.rotation or 0,
             "sort_order": r.sort_order,
+            "family_group_id": r.family_group_id,
+            "family_group_label": r.family_group_label,
             "created_at": r.created_at,
             "spreadsheet_summary": sheet_summary,
         })
@@ -181,6 +198,30 @@ async def get_spreadsheet(
         data["preview_truncated"] = truncated_any
         data["preview_limit"] = limit
     return data
+
+
+@router.post("/{image_id}/rotate")
+async def rotate_image(
+    project_id: int,
+    batch_id: int,
+    image_id: int,
+    degrees: int = 90,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Add `degrees` to the image's rotation (modulo 360). Rotation is stored
+    on the DB row and applied via CSS in the viewer — original file is never
+    modified."""
+    result = await db.execute(
+        select(Image).where((Image.id == image_id) & (Image.batch_id == batch_id))
+    )
+    image = result.scalars().first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    new = ((image.rotation or 0) + int(degrees)) % 360
+    image.rotation = new
+    await db.commit()
+    return {"id": image.id, "rotation": new}
 
 
 @router.delete("/{image_id}")

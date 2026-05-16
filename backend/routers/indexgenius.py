@@ -6,7 +6,8 @@ import json
 from backend.database import get_db
 from backend.models import OCRText, Record, Image
 from backend.services.indexgenius_service import IndexGeniusService
-from backend.services.gemini_service import GeminiService
+from backend.services.ai_service import ai_service
+from backend.services import tree_autobuild
 from backend.schemas.record import (
     RecordExtraction, FamilyMember, Person, Relation, MetadataField,
 )
@@ -14,7 +15,6 @@ from backend.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/projects/{project_id}/batches/{batch_id}/indexgenius", tags=["indexgenius"])
 indexgenius_service = IndexGeniusService()
-gemini_service = GeminiService()
 
 
 def _build_extraction_from_spreadsheet(raw: dict) -> RecordExtraction:
@@ -92,14 +92,15 @@ async def extract_records(
             if not image.spreadsheet_data:
                 raise HTTPException(status_code=400, detail="Spreadsheet not parsed.")
             ss = json.loads(image.spreadsheet_data)
-            raw = await gemini_service.extract_from_spreadsheet(ss.get("sheets") or [])
+            raw = await ai_service.extract_from_spreadsheet(ss.get("sheets") or [])
             extraction = _build_extraction_from_spreadsheet(raw)
         else:
             result = await db.execute(select(OCRText).where(OCRText.image_id == image_id))
             ocr = result.scalars().first()
             if not ocr or not ocr.current_text:
                 raise HTTPException(status_code=400, detail="OCR text required for extraction")
-            extraction = await indexgenius_service.extract_record(ocr.current_text)
+            image_path = image.enhanced_path or image.original_path
+            extraction = await indexgenius_service.extract_record(ocr.current_text, image_path=image_path)
         
         # Save to DB (In real app, might handle multiple records per image)
         # For MVP, we save one primary record
@@ -136,8 +137,14 @@ async def extract_records(
         result = await db.execute(select(Image).where(Image.id == image_id))
         image = result.scalars().first()
         image.indexgenius_status = 'done'
-        
+
         await db.commit()
+
+        # Fire-and-forget: rebuild the batch tree now that this image has fresh
+        # extractions. The autobuild helper coalesces concurrent triggers so
+        # bulk re-extracts don't spawn N parallel Gemini calls.
+        tree_autobuild.schedule(batch_id)
+
         return [extraction]
     except HTTPException:
         raise
